@@ -20,7 +20,7 @@ COPY src/ ./src/
 
 RUN chmod +x start.sh
 
-RUN uv sync --no-dev --no-group test --group telebot --locked
+RUN uv sync --no-dev --group telebot --locked
 
 ENV TZ=Asia/Shanghai
 

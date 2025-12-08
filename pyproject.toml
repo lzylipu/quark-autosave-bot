@@ -78,9 +78,7 @@ plugins = ["nonebot_plugin_quark_autosave"]
 test = "pytest --cov=src --cov-report xml --junitxml=./junit.xml -n auto"
 bump = "bump-my-version bump"
 show-bump = "bump-my-version show-bump"
-
-[tool.poe.tasks.freeze]
-shell = "uv sync --no-install-project --no-dev --group telebot && uv pip freeze > requirements.txt"
+freeze = { shell = "uv sync --no-install-project --no-dev --group telebot && uv pip freeze > requirements.txt" }
 
 [tool.pyright]
 pythonVersion = "3.10"
