@@ -34,7 +34,7 @@ SHARE_URL_REGEX_SIMPLE = (
 )
 
 simple_qas = on_command(
-    plugin_config.simple_command,
+    str(plugin_config.simple_command),
     permission=SUPERUSER,
     block=True,
 )
