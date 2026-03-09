@@ -74,6 +74,16 @@ async def _(event: Event):
             root_title = sanitize_title(detail.share.title)
             task = TaskItem.simple_from_title(root_title, shareurl)
 
+            # 强制写入插件配置，确保 aria2 自动下载生效
+            task.addition = {
+                "aria2": {
+                    "auto_download": True,
+                    "pause": False,
+                }
+            }
+
+            print("[quark-autosave-bot] add task payload:", task.model_dump())
+
             await client.add_task(task)
 
             data = await client.get_data()
