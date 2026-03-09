@@ -14,10 +14,7 @@ ENV QAS_PATH_BASE="夸克自动转存"
 ENV SIMPLE_COMMAND="1"
 ENV SIMPLE_SAVE_ROOT="自动"
 
-COPY pyproject.toml README.md /app/
-COPY src /app/src
-COPY bot.py /app/bot.py
-COPY start.sh /app/start.sh
+COPY . /app
 
 RUN chmod +x /app/start.sh
 
