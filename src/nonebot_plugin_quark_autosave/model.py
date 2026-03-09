@@ -1,6 +1,6 @@
 from typing import Any, Literal, TypeAlias
 
-from pydantic import Field, BaseModel
+from pydantic import BaseModel, Field
 
 from .config import plugin_config
 
@@ -40,12 +40,9 @@ class Share(BaseModel):
 
 class FileItem(BaseModel):
     fid: str
-    # 文件名
     file_name: str
     updated_at: int
-    # 正则处理后的文件名
     file_name_re: str | None = None
-    # 已经保存到夸克网盘的文件名
     file_name_saved: str | None = None
 
     @property
@@ -85,7 +82,6 @@ class MagicRegex(BaseModel):
 
     @classmethod
     def display_patterns_alias(cls) -> str:
-        """显示模式索引和别名"""
         return "\n".join(
             f" - {i}. {alias or '以原始媒体名称转存'}"
             for i, alias in enumerate(cls.pattern_aliases())
@@ -93,7 +89,6 @@ class MagicRegex(BaseModel):
 
     @classmethod
     def get_pattern_alias(cls, pattern_idx: PatternIdx) -> str:
-        """根据模式索引获取模式别名"""
         return cls.pattern_aliases()[pattern_idx]
 
 
@@ -133,7 +128,6 @@ class TaskItem(BaseModel):
     taskname: str
     shareurl: str
     savepath: str
-    # 这三个不能 optional
     pattern: str = ""
     replace: str = ""
     enddate: str = ""
@@ -195,16 +189,13 @@ class TaskItem(BaseModel):
         )
 
     def set_pattern(self, pattern_idx: PatternIdx):
-        """设置匹配模式"""
         self.pattern = MagicRegex.get_pattern_alias(pattern_idx)
 
     def detail(self) -> DetailInfo:
-        """获取详情信息"""
         assert self.detail_info is not None
         return self.detail_info
 
     def set_startfid(self, startfid_idx: int):
-        """设置起始文件"""
         assert self.detail_info is not None
         file_list = self.detail().file_list
         startfid_idx = startfid_idx % len(file_list)
@@ -213,7 +204,6 @@ class TaskItem(BaseModel):
         self.start_fid_updated_at = file.updated_at
 
     def display_file_list(self) -> str:
-        """显示文件列表"""
         file_list = [
             file
             for file in self.detail().file_list
