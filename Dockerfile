@@ -1,7 +1,9 @@
-FROM ghcr.io/astral-sh/uv:0.9.7-python3.12-bookworm-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 ENV TZ=Asia/Shanghai
 ENV PORT=8080
 ENV SUPERUSER=""
@@ -12,14 +14,15 @@ ENV QAS_PATH_BASE="夸克自动转存"
 ENV SIMPLE_COMMAND="1"
 ENV SIMPLE_SAVE_ROOT="自动"
 
-COPY pyproject.toml uv.lock README.md /app/
+COPY pyproject.toml README.md /app/
 COPY src /app/src
 COPY bot.py /app/bot.py
 COPY start.sh /app/start.sh
 
 RUN chmod +x /app/start.sh
 
-# 只安装运行需要的依赖，不装 dev
-RUN uv sync --locked --no-dev --only-group telebot
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir . && \
+    pip install --no-cache-dir "nonebot-adapter-telegram>=0.1.0b20" "nonebot2[httpx]>=2.4.3,<3.0.0"
 
 CMD ["/bin/bash", "/app/start.sh"]
