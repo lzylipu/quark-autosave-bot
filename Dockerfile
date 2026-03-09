@@ -4,6 +4,7 @@ WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/src
 ENV TZ=Asia/Shanghai
 ENV PORT=8080
 ENV SUPERUSER=""
@@ -19,7 +20,10 @@ COPY . /app
 RUN chmod +x /app/start.sh
 
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir . && \
-    pip install --no-cache-dir "nonebot-adapter-telegram>=0.1.0b20" "nonebot2[fastapi,httpx]>=2.4.3,<3.0.0"
+    pip install --no-cache-dir \
+    "httpx>=0.27.0,<1.0.0" \
+    "nonebot-plugin-alconna>=0.59.4,<1.0.0" \
+    "nonebot2[fastapi,httpx]>=2.4.3,<3.0.0" \
+    "nonebot-adapter-telegram>=0.1.0b20"
 
 CMD ["/bin/bash", "/app/start.sh"]
