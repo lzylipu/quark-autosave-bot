@@ -74,16 +74,17 @@ async def _(event: Event):
             root_title = sanitize_title(detail.share.title)
             task = TaskItem.simple_from_title(root_title, shareurl)
 
-            # 强制写入任务级 aria2 配置
+            # 强制写入 aria2 自动下载配置
             task.addition = {
                 "aria2": {
                     "auto_download": True,
                     "pause": False,
+                    "save_path": ""
                 }
             }
 
-            # 打印最终发送给 QAS 的任务内容，方便排查
-            print("[quark-autosave-bot] task payload:", task.model_dump())
+            payload = task.model_dump()
+            print("[quark-autosave-bot] add task payload:", payload)
 
             await client.add_task(task)
 
