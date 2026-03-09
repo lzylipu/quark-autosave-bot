@@ -1,10 +1,17 @@
-cat > .env.prod <<EOF
-DRIVER=~httpx
+#!/usr/bin/env bash
+set -e
+
+cat > /app/.env.prod <<EOF
+HOST=0.0.0.0
 PORT=${PORT}
 SUPERUSERS=["${SUPERUSER}"]
-COMMAND_START=["", "/"]
-telegram_bots=[{"token": "${TELEGRAM_BOT_TOKEN}"}]
-qas_endpoint=${QAS_ENDPOINT}
-qas_token=${QAS_TOKEN}
+COMMAND_START=["/",""]
+TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+QAS_ENDPOINT=${QAS_ENDPOINT}
+QAS_TOKEN=${QAS_TOKEN}
+QAS_PATH_BASE=${QAS_PATH_BASE}
+SIMPLE_COMMAND=${SIMPLE_COMMAND}
+SIMPLE_SAVE_ROOT=${SIMPLE_SAVE_ROOT}
 EOF
-uv run --no-sync bot.py
+
+exec uv run python -m nonebot run --env prod
