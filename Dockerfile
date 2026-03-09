@@ -23,6 +23,6 @@ RUN chmod +x /app/start.sh
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir . && \
-    pip install --no-cache-dir "nonebot-adapter-telegram>=0.1.0b20" "nonebot2[httpx]>=2.4.3,<3.0.0"
+    pip install --no-cache-dir "nonebot-adapter-telegram>=0.1.0b20" "nonebot2[fastapi,httpx]>=2.4.3,<3.0.0"
 
 CMD ["/bin/bash", "/app/start.sh"]
