@@ -1,25 +1,31 @@
-# 构建阶段
 FROM ghcr.io/astral-sh/uv:0.9.7-python3.12-bookworm
 
-# RUN apt-get update && apt-get install -y git curl ffmpeg && apt-get clean && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
-ENV PORT=8080 \
-    SUPERUSER="123456789" \
-    TELEGRAM_BOT_TOKEN=[] \
-    QAS_ENDPOINT="http://quark-auto-save:5005" \
-    QAS_TOKEN="123456789"
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    ffmpeg \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+ENV TZ=Asia/Shanghai
+ENV PORT=8080
+ENV SUPERUSER=""
+ENV TELEGRAM_BOT_TOKEN=""
+ENV QAS_ENDPOINT="http://quark-auto-save:5005"
+ENV QAS_TOKEN=""
+ENV QAS_PATH_BASE="夸克自动转存"
+ENV SIMPLE_COMMAND="1"
+ENV SIMPLE_SAVE_ROOT="自动"
 
-RUN uv venv && uv pip install -r requirements.txt
+COPY pyproject.toml uv.lock README.md /app/
+COPY src /app/src
+COPY bot.py /app/bot.py
+COPY start.sh /app/start.sh
 
-COPY . .
-
-RUN chmod +x start.sh
+RUN chmod +x /app/start.sh
 
 RUN uv sync --no-dev --group telebot --locked
 
-ENV TZ=Asia/Shanghai
-
-CMD ["/bin/bash", "start.sh"]
+CMD ["/bin/bash", "/app/start.sh"]
