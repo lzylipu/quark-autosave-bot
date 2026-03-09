@@ -149,48 +149,6 @@ A: 这是设计使然。机器人采用“创建 -> 执行 -> 删除”的临时
 **Q: 为什么保存路径不是我想要的？**
 A: 当前版本为了极简体验，固定了保存路径规则为 `/SIMPLE_SAVE_ROOT/分享根目录名称`。如果你需要更灵活的配置，可以考虑使用上游功能更全的插件版本。
 
-## 🏗️ 本地开发与运行
-
-1.  **克隆仓库**
-    ```bash
-    git clone https://github.com/lzylipu/quark-autosave-bot.git
-    cd quark-autosave-bot
-    ```
-
-2.  **创建虚拟环境**
-    ```bash
-    python -m venv .venv
-    source .venv/bin/activate  # Linux/MacOS
-    # .venv\Scripts\activate  # Windows
-    ```
-
-3.  **安装依赖**
-    ```bash
-    pip install -r requirements.txt
-    # 或使用 pip install nonebot2[fastapi,httpx] nonebot-adapter-telegram nonebot-plugin-waiter httpx
-    ```
-
-4.  **配置环境变量**
-    创建 `.env.prod` 文件：
-    ```env
-    HOST=0.0.0.0
-    PORT=8080
-    SUPERUSERS=["你的Telegram用户ID"]
-    COMMAND_START=["/",""]
-
-    DRIVER=~fastapi+~httpx
-
-    telegram_bots=[{"token":"你的Bot Token"}]
-
-    QAS_ENDPOINT=http://你的QAS地址:5005
-    QAS_TOKEN=你的QAS API Token
-    ```
-
-5.  **运行机器人**
-    ```bash
-    python bot.py
-    ```
-
 ## 🙏 致谢
 
 *   [Cp0204/quark-auto-save](https://github.com/Cp0204/quark-auto-save) - 提供强大的后端支持。
