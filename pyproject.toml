@@ -1,5 +1,5 @@
 [project]
-name = "nonebot-plugin-quark-autosave"
+name = "quark-autosave-bot"
 version = "0.1.9"
 description = "配合 quark-auto-save(https://github.com/Cp0204/quark-auto-save) 使用, 支持添加，删除，列出，运行任务"
 readme = "README.md"
