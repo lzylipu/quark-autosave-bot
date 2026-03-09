@@ -1,13 +1,6 @@
-FROM ghcr.io/astral-sh/uv:0.9.7-python3.12-bookworm
+FROM ghcr.io/astral-sh/uv:0.9.7-python3.12-bookworm-slim
 
 WORKDIR /app
-
-RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    ffmpeg \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
 
 ENV TZ=Asia/Shanghai
 ENV PORT=8080
@@ -26,6 +19,7 @@ COPY start.sh /app/start.sh
 
 RUN chmod +x /app/start.sh
 
-RUN uv sync --no-dev --group telebot --locked
+# 只装运行 Telegram bot 需要的依赖，不装 dev/test
+RUN uv sync --locked --no-dev --only-group telebot
 
 CMD ["/bin/bash", "/app/start.sh"]
