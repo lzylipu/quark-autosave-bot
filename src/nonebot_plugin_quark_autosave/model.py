@@ -8,6 +8,14 @@ PatternIdx: TypeAlias = Literal[0, 1, 2, 3, 4]
 RunWeek: TypeAlias = list[Literal[1, 2, 3, 4, 5, 6, 7]]
 
 
+def sanitize_title(title: str) -> str:
+    bad = '\\/:*?"<>|'
+    for ch in bad:
+        title = title.replace(ch, "_")
+    title = title.strip()
+    return title or "未命名分享"
+
+
 class Share(BaseModel):
     title: str
     share_type: int
@@ -42,7 +50,9 @@ class FileItem(BaseModel):
 
     @property
     def regex_result(self) -> str:
-        res_name = self.file_name_re or (f"{self.file_name_saved} (已存盘)" if self.file_name_saved else None)
+        res_name = self.file_name_re or (
+            f"{self.file_name_saved} (已存盘)" if self.file_name_saved else None
+        )
         return f"{self.file_name} -> {res_name}"
 
 
@@ -57,10 +67,6 @@ class DetailInfo(BaseModel):
     file_list: list[FileItem] = Field(alias="list")
     paths: list[SharePath] = Field(default_factory=list)
     stoken: str
-
-    # @property
-    # def last_update_file_fid(self) -> str:
-    #     return max(self.file_list, key=lambda x: x.updated_at).fid
 
 
 class MagicRegex(BaseModel):
@@ -80,7 +86,10 @@ class MagicRegex(BaseModel):
     @classmethod
     def display_patterns_alias(cls) -> str:
         """显示模式索引和别名"""
-        return "\n".join(f" - {i}. {alias or '以原始媒体名称转存'}" for i, alias in enumerate(cls.pattern_aliases()))
+        return "\n".join(
+            f" - {i}. {alias or '以原始媒体名称转存'}"
+            for i, alias in enumerate(cls.pattern_aliases())
+        )
 
     @classmethod
     def get_pattern_alias(cls, pattern_idx: PatternIdx) -> str:
@@ -92,11 +101,22 @@ class Addition(BaseModel):
     smartstrm: dict[str, Any] = Field(default_factory=dict)
     alist_strm_gen: dict[str, Any] = Field(default_factory=lambda: {"auto_gen": False})
     alist_sync: dict[str, Any] = Field(
-        default_factory=lambda: {"enable": False, "save_path": "", "verify_path": "", "full_path_mode": False}
+        default_factory=lambda: {
+            "enable": False,
+            "save_path": "",
+            "verify_path": "",
+            "full_path_mode": False,
+        }
     )
-    aria2: dict[str, Any] = Field(default_factory=lambda: {"auto_download": False, "pause": False})
-    emby: dict[str, Any] = Field(default_factory=lambda: {"try_match": False, "media_id": ""})
-    fnv: dict[str, Any] = Field(default_factory=lambda: {"auto_refresh": False, "mdb_name": ""})
+    aria2: dict[str, Any] = Field(
+        default_factory=lambda: {"auto_download": False, "pause": False}
+    )
+    emby: dict[str, Any] = Field(
+        default_factory=lambda: {"try_match": False, "media_id": ""}
+    )
+    fnv: dict[str, Any] = Field(
+        default_factory=lambda: {"auto_refresh": False, "mdb_name": ""}
+    )
 
     def __str__(self):
         return (
@@ -121,7 +141,6 @@ class TaskItem(BaseModel):
     ignore_extension: bool = False
     runweek: RunWeek = Field(default_factory=lambda: [5, 6, 7])
     startfid: str | None = None
-
     detail_info: DetailInfo | None = Field(default=None, exclude=True)
     start_fid_updated_at: int = Field(default=1, exclude=True)
 
@@ -134,13 +153,16 @@ class TaskItem(BaseModel):
             f"替换规则: {self.replace}\n"
             f"结束日期: {self.enddate if self.enddate else '始终有效'}\n"
             f"运行周期: {self.runweek}\n"
-            # f"附加配置:\n{self.addition}\n"
             f"忽略扩展名: {self.ignore_extension}\n"
             f"起始文件: {self.startfid}"
         )
 
     def display_simple(self) -> str:
-        return f"{self.taskname}\n - 运行周期: {self.runweek}\n - 匹配规则: {self.pattern}"
+        return (
+            f"{self.taskname}\n"
+            f" - 运行周期: {self.runweek}\n"
+            f" - 匹配规则: {self.pattern}"
+        )
 
     @classmethod
     def template(
@@ -156,6 +178,22 @@ class TaskItem(BaseModel):
             pattern=MagicRegex.get_pattern_alias(pattern_idx),
         )
 
+    @classmethod
+    def simple_from_title(cls, title: str, shareurl: str) -> "TaskItem":
+        safe_title = sanitize_title(title)
+        return cls(
+            taskname=safe_title,
+            shareurl=shareurl,
+            savepath=f"/{plugin_config.simple_save_root}/{safe_title}",
+            pattern="",
+            replace="",
+            enddate="",
+            ignore_extension=False,
+            runweek=[],
+            startfid="",
+            addition={},
+        )
+
     def set_pattern(self, pattern_idx: PatternIdx):
         """设置匹配模式"""
         self.pattern = MagicRegex.get_pattern_alias(pattern_idx)
@@ -169,7 +207,6 @@ class TaskItem(BaseModel):
         """设置起始文件"""
         assert self.detail_info is not None
         file_list = self.detail().file_list
-        # 取模防止数组越界
         startfid_idx = startfid_idx % len(file_list)
         file = file_list[startfid_idx]
         self.startfid = file.fid
@@ -177,8 +214,11 @@ class TaskItem(BaseModel):
 
     def display_file_list(self) -> str:
         """显示文件列表"""
-        # 如果 start_fid 不为空，则过滤掉小于 start_fid 的文件
-        file_list = [file for file in self.detail().file_list if file.updated_at >= self.start_fid_updated_at]
+        file_list = [
+            file
+            for file in self.detail().file_list
+            if file.updated_at >= self.start_fid_updated_at
+        ]
         res_lst = [f"{i}. {file.regex_result}" for i, file in enumerate(file_list)]
         if len(res_lst) > 15:
             res_lst = [*res_lst[:5], "...", *res_lst[-5:]]
@@ -197,7 +237,7 @@ class AutosaveData(BaseModel):
     api_token: str
     crontab: str
     tasklist: list[TaskItem]
-    magic_regex: dict[str, MagicRegex]  # tv_regex, black_word, show_magic, tv_magic, (pattern, replace)
+    magic_regex: dict[str, MagicRegex]
     source: dict[str, Any]
     push_config: dict[str, Any]
     plugins: dict[str, Any]
