@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from .config import plugin_config
 
+
 PatternIdx: TypeAlias = Literal[0, 1, 2, 3, 4]
 RunWeek: TypeAlias = list[Literal[1, 2, 3, 4, 5, 6, 7]]
 
@@ -104,7 +105,11 @@ class Addition(BaseModel):
         }
     )
     aria2: dict[str, Any] = Field(
-        default_factory=lambda: {"auto_download": False, "pause": False}
+        default_factory=lambda: {
+            "auto_download": False,
+            "download_subdir": True,
+            "pause": False,
+        }
     )
     emby: dict[str, Any] = Field(
         default_factory=lambda: {"try_match": False, "media_id": ""}
@@ -175,6 +180,7 @@ class TaskItem(BaseModel):
     @classmethod
     def simple_from_title(cls, title: str, shareurl: str) -> "TaskItem":
         safe_title = sanitize_title(title)
+
         return cls(
             taskname=safe_title,
             shareurl=shareurl,
@@ -188,6 +194,7 @@ class TaskItem(BaseModel):
             addition={
                 "aria2": {
                     "auto_download": True,
+                    "download_subdir": True,
                     "pause": False,
                 }
             },
