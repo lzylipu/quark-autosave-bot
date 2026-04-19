@@ -78,6 +78,7 @@ async def _(event: Event):
             task.addition = {
                 "aria2": {
                     "auto_download": True,
+                    "download_subdir": True,
                     "pause": False,
                     "save_path": ""
                 }
