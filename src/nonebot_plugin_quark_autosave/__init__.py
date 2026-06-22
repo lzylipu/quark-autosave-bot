@@ -1,6 +1,7 @@
 import re
+import asyncio
 
-from nonebot import on_message
+from nonebot import logger, on_message
 from nonebot.adapters import Event
 from nonebot.exception import FinishedException
 from nonebot.permission import SUPERUSER
@@ -12,7 +13,7 @@ from .model import TaskItem, sanitize_title
 
 __plugin_meta__ = PluginMetadata(
     name="夸克自动转存",
-    description="配合 quark-auto-save 使用的极简 TG 私聊插件：1 -> 链接 -> 自动取根目录名 -> 建任务 -> 执行 -> 删除任务",
+    description="Minimal QAS plugin: 1 -> link -> auto save -> cleanup",
     usage="发送 1 后按提示发送夸克链接",
     type="application",
     homepage="https://github.com/lzylipu/quark-autosave-bot",
@@ -21,15 +22,27 @@ __plugin_meta__ = PluginMetadata(
     extra={"author": "lzylipu"},
 )
 
-SHARE_URL_REGEX_SIMPLE = (
+SHARE_URL_REGEX = re.compile(
     r"^(?:https://|http://)?pan\.quark\.cn/s/[0-9a-zA-Z]+"
     r"(?:\?pwd=[0-9a-zA-Z]+)?"
     r"(?:#/list/share/[0-9a-zA-Z]+)?$"
 )
 
-WAITING_USERS: dict[str, bool] = {}
+# 等待状态 + 60秒自动超时清理
+WAITING_USERS: dict[str, float] = {}  # user_key -> timestamp
+WAIT_TIMEOUT = 60.0
 
-simple_qas = on_message(permission=SUPERUSER, block=True)
+qas_handler = on_message(permission=SUPERUSER, block=True)
+
+
+def _cleanup_expired_users():
+    """清理超时的等待状态"""
+    now = asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else 0
+    if now == 0:
+        return
+    expired = [k for k, t in WAITING_USERS.items() if now - t > WAIT_TIMEOUT]
+    for k in expired:
+        del WAITING_USERS[k]
 
 
 def get_user_key(event: Event) -> str:
@@ -46,49 +59,60 @@ def get_text(event: Event) -> str:
         return str(getattr(event, "message", "")).strip()
 
 
-@simple_qas.handle()
-async def _(event: Event):
+@qas_handler.handle()
+async def handle_message(event: Event):
+    _cleanup_expired_users()
     text = get_text(event)
     user_key = get_user_key(event)
 
+    # 触发等待模式
     if text == str(plugin_config.simple_command):
-        WAITING_USERS[user_key] = True
-        await simple_qas.finish("继续")
+        WAITING_USERS[user_key] = asyncio.get_event_loop().time()
+        await qas_handler.finish("继续")
 
-    if not WAITING_USERS.get(user_key, False):
+    # 非等待状态，忽略
+    if user_key not in WAITING_USERS:
         return
 
-    if not re.fullmatch(SHARE_URL_REGEX_SIMPLE, text):
-        WAITING_USERS[user_key] = False
-        await simple_qas.finish("错")
+    # 检查是否超时
+    elapsed = asyncio.get_event_loop().time() - WAITING_USERS[user_key]
+    if elapsed > WAIT_TIMEOUT:
+        del WAITING_USERS[user_key]
+        await qas_handler.finish("超时，请重新发送指令")
 
+    # 校验链接格式
+    if not SHARE_URL_REGEX.fullmatch(text):
+        del WAITING_USERS[user_key]
+        await qas_handler.finish("错")
+
+    # 确保链接有协议头
     shareurl = text
-    if not shareurl.startswith("http://") and not shareurl.startswith("https://"):
+    if not shareurl.startswith(("http://", "https://")):
         shareurl = "https://" + shareurl
 
     try:
         async with QASClient() as client:
-            temp_task = TaskItem.simple_from_title("临时任务", shareurl)
+            # 先获取分享详情，取根目录名作为任务名
+            temp_task = TaskItem.simple_from_title("temp", shareurl)
             detail = await client.get_share_detail(temp_task)
 
             root_title = sanitize_title(detail.share.title)
             task = TaskItem.simple_from_title(root_title, shareurl)
 
-            # 强制写入 aria2 自动下载配置
+            # 强制启用 aria2 自动下载
             task.addition = {
                 "aria2": {
                     "auto_download": True,
                     "download_subdir": True,
                     "pause": False,
-                    "save_path": ""
+                    "save_path": "",
                 }
             }
 
-            payload = task.model_dump()
-            print("[quark-autosave-bot] add task payload:", payload)
+            logger.info(f"Adding task: {task.taskname} | {shareurl}")
 
+            # 添加 -> 执行 -> 删除（原子流程）
             await client.add_task(task)
-
             data = await client.get_data()
             task_idx = len(data.tasklist)
 
@@ -99,11 +123,10 @@ async def _(event: Event):
 
     except FinishedException:
         raise
-
     except Exception as e:
-        print(f"[nonebot_plugin_quark_autosave] error: {e}")
-        WAITING_USERS[user_key] = False
-        await simple_qas.finish("错")
+        logger.error(f"QAS pipeline failed: {e}")
+        del WAITING_USERS[user_key]
+        await qas_handler.finish("错")
 
-    WAITING_USERS[user_key] = False
-    await simple_qas.finish("好了")
+    del WAITING_USERS[user_key]
+    await qas_handler.finish("好了")
