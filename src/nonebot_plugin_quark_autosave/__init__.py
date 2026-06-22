@@ -15,10 +15,10 @@ __plugin_meta__ = PluginMetadata(
     description="配合 quark-auto-save 使用的极简 TG 私聊插件：1 -> 链接 -> 自动取根目录名 -> 建任务 -> 执行 -> 删除任务",
     usage="发送 1 后按提示发送夸克链接",
     type="application",
-    homepage="https://github.com/fllesser/nonebot-plugin-quark-autosave",
+    homepage="https://github.com/lzylipu/quark-autosave-bot",
     config=Config,
     supported_adapters=inherit_supported_adapters(),
-    extra={"author": "fllesser / co-created"},
+    extra={"author": "lzylipu"},
 )
 
 SHARE_URL_REGEX_SIMPLE = (

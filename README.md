@@ -6,91 +6,71 @@
 [![License](https://img.shields.io/github/license/lzylipu/quark-autosave-bot.svg)](./LICENSE)
 [![Docker](https://img.shields.io/docker/pulls/lzylipu/quarkbot)](https://hub.docker.com/r/lzylipu/quarkbot)
 
-**极简夸克网盘转存 Telegram 机器人**
+**Minimal Telegram bot for Quark cloud auto-save**
 
 </div>
 
 ---
 
-## 简介
+## Features
 
-基于 [NoneBot2](https://v2.nonebot.dev/) 的 Telegram 机器人，配合 [quark-auto-save](https://github.com/Cp0204/quark-auto-save) 实现夸克网盘链接自动转存。
+- **One-tap save**: Send `1` → link → done
+- **Auto pipeline**: Parse → create task → execute → cleanup
+- **Privacy-first**: Only responds to configured superuser
+- **Docker-ready**: Single command deployment
 
-**特点**：
-- 极简交互：发送 `1` → `继续` → 发送链接 → `好了`
-- 全自动：自动解析、创建任务、执行、清理
-- 私密安全：仅响应设定的超级用户
+## Quick Start
 
----
-
-## 快速开始
-
-### Docker 部署
+### Docker
 
 ```bash
 docker run -d \
   --name quarkbot \
-  -e SUPERUSER="你的Telegram用户ID" \
-  -e TELEGRAM_BOT_TOKEN="你的Bot Token" \
-  -e QAS_ENDPOINT="http://你的QAS地址:5005" \
-  -e QAS_TOKEN="你的QAS Token" \
+  -e SUPERUSER="your...en" \
+  -e TELEGRAM_BOT_TOKEN="your...en" \
+  -e QAS_ENDPOINT="http://your-qas:5005" \
+  -e QAS_TOKEN="your...en" \
   --restart unless-stopped \
   lzylipu/quarkbot:latest
 ```
 
 ### Docker Compose
 
-```yaml
-services:
-  quarkbot:
-    image: lzylipu/quarkbot:latest
-    container_name: quarkbot
-    environment:
-      SUPERUSER: "你的Telegram用户ID"
-      TELEGRAM_BOT_TOKEN: "你的Bot Token"
-      QAS_ENDPOINT: "http://quark-auto-save:5005"
-      QAS_TOKEN: "你的QAS Token"
-    restart: unless-stopped
+```bash
+cp .env.example .env  # fill in your values
+docker compose up -d
 ```
 
----
+## Environment Variables
 
-## 环境变量
+| Variable | Required | Default | Description |
+|----------|:--------:|---------|-------------|
+| `TELEGRAM_BOT_TOKEN` | ✓ | | Bot token from [@BotFather](https://t.me/BotFather) |
+| `SUPERUSER` | ✓ | | Your Telegram user ID from [@userinfobot](https://t.me/userinfobot) |
+| `QAS_ENDPOINT` | ✓ | | QAS service URL |
+| `QAS_TOKEN` | ✓ | | QAS API token |
+| `SIMPLE_COMMAND` | | `1` | Trigger command |
+| `SIMPLE_SAVE_ROOT` | | `auto` | Save root folder name |
 
-| 变量 | 必填 | 说明 |
-|------|:----:|------|
-| `TELEGRAM_BOT_TOKEN` | ✓ | Bot Token（从 [@BotFather](https://t.me/BotFather) 获取）|
-| `SUPERUSER` | ✓ | 用户 ID（从 [@userinfobot](https://t.me/userinfobot) 获取）|
-| `QAS_ENDPOINT` | ✓ | QAS 服务地址 |
-| `QAS_TOKEN` | ✓ | QAS API Token |
-| `SIMPLE_COMMAND` | | 触发指令，默认 `1` |
-| `SIMPLE_SAVE_ROOT` | | 保存根目录，默认 `自动` |
-
----
-
-## 使用方法
+## Usage
 
 ```
-你：1
-机器人：继续
-你：https://pan.quark.cn/s/xxxxx
-机器人：好了
+You: 1
+Bot: continue
+You: https://pan.quark.cn/s/xxxxx
+Bot: done
 ```
 
----
+## Setup
 
-## 重要设置
+Disable privacy mode in [@BotFather](https://t.me/BotFather): `/setprivacy` → select bot → `Disable`.
 
-在 [@BotFather](https://t.me/BotFather) 执行 `/setprivacy` → 选择机器人 → `Disable`，关闭隐私模式。
+## Credits
 
----
+- [Cp0204/quark-auto-save](https://github.com/Cp0204/quark-auto-save) - Backend service
+- [fllesser/nonebot-plugin-quark-autosave](https://github.com/fllesser/nonebot-plugin-quark-autosave) - Original plugin
+- [NoneBot2](https://v2.nonebot.dev/) - Bot framework
 
-## 致谢
+## License
 
-- [Cp0204/quark-auto-save](https://github.com/Cp0204/quark-auto-save) - 后端服务
-- [fllesser/nonebot-plugin-quark-autosave](https://github.com/fllesser/nonebot-plugin-quark-autosave) - 原始插件
-- [NoneBot2](https://v2.nonebot.dev/) - 机器人框架
-
-## 许可证
-
-[MIT License](./LICENSE)
+[MIT](./LICENSE)
