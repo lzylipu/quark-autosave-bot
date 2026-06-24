@@ -35,11 +35,10 @@
 
 ## ✨ Features
 
-- 🔗 **One-Click Save** — Send a Quark Cloud sharing link, and it's auto-saved to your drive
-- 🤖 **Telegram Native** — Pure conversational interaction, no extra UI needed
+- 🔗 **One-Click Save** — Just send a Quark Cloud sharing link — auto-saved instantly
+- 🤖 **Telegram Native** — Send link directly, no trigger command needed
 - 🐳 **Docker One-Command Deploy** — Image `lzylipu/quarkbot:latest`, up in 30 seconds
 - 🧹 **Auto Cleanup** — Tasks are deleted after save completes, keeping the backend tidy
-- ⏱ **Timeout Guard** — Waiting state expires after 60 seconds of inactivity
 - 🔒 **Access Control** — Only the Superuser can trigger the bot
 
 ---
@@ -47,17 +46,15 @@
 ## 🔄 How It Works
 
 ```
-User sends "1"  ──→  Bot enters waiting state
-                            │
 User sends Quark link  ──→  Validate link format
-                            │
-                      Fetch share details
-                            │
-                      Add save task (aria2 auto-download)
-                            │
-                      Execute save script
-                            │
-                      Delete task & reply "Done"
+                          │
+                    Fetch share details
+                          │
+                    Add save task (aria2 auto-download)
+                          │
+                    Execute save script
+                          │
+                    Delete task & reply "Done"
 ```
 
 ---
@@ -103,7 +100,6 @@ docker compose up -d
 | `SUPERUSER` | ✅ | | Telegram User ID from [@userinfobot](https://t.me/userinfobot) |
 | `QAS_ENDPOINT` | ✅ | `http://quark-auto-save:5005` | QAS service address; change to actual URL for standalone deployment |
 | `QAS_TOKEN` | ✅ | | QAS API key |
-| `SIMPLE_COMMAND` | | `1` | Trigger command, customizable (e.g. `save`) |
 | `SIMPLE_SAVE_ROOT` | | `auto` | Root folder name for saved files in your drive |
 
 ---
@@ -123,14 +119,10 @@ When using Compose, a QAS service (`cp0204/quark-auto-save:latest`) is included 
 ## 💬 Chat Example
 
 ```
-You:  1
-Bot:  Continue
-
 You:  https://pan.quark.cn/s/xxxxxxxx
+Bot:  Saving...
 Bot:  Done
 ```
-
-> ⏱ If no link is sent within 60 seconds, the waiting state expires — send the command again.
 
 ---
 

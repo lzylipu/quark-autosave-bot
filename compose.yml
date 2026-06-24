@@ -10,7 +10,6 @@ services:
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       QAS_ENDPOINT: "${QAS_ENDPOINT:-http://quark-auto-save:5005}"
       QAS_TOKEN: "${QAS_TOKEN}"
-      SIMPLE_COMMAND: "${SIMPLE_COMMAND:-1}"
       SIMPLE_SAVE_ROOT: "${SIMPLE_SAVE_ROOT:-auto}"
     restart: unless-stopped
     depends_on: [quark-auto-save]
