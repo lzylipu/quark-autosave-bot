@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/github/license/lzylipu/quark-autosave-bot?style=flat-square)](./LICENSE)
 [![GitHub](https://img.shields.io/badge/_repo-quark--autosave--bot-181717.svg?style=flat-square&logo=github&logoColor=white)](https://github.com/lzylipu/quark-autosave-bot)
 
-简体中文 · [English](./README.en.md)
+[English](./README.en.md) · [简体中文](./README.md)
 
 </div>
 
