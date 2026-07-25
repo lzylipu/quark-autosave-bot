@@ -1,5 +1,4 @@
 import re
-import asyncio
 
 from nonebot import logger, on_message
 from nonebot.adapters import Event
@@ -10,11 +9,12 @@ from nonebot.plugin import PluginMetadata, inherit_supported_adapters
 from .client import QASClient
 from .config import Config, plugin_config
 from .model import TaskItem, sanitize_title
+from .exception import QASException
 
 __plugin_meta__ = PluginMetadata(
     name="夸克自动转存",
-    description="直接发送夸克网盘链接即可自动转存",
-    usage="直接发送夸克网盘分享链接，自动转存到网盘",
+    description="发夸克链接直接转存，智能检测链接有效性",
+    usage="直接发送夸克网盘链接即可，如: https://pan.quark.cn/s/xxxxx",
     type="application",
     homepage="https://github.com/lzylipu/quark-autosave-bot",
     config=Config,
@@ -22,14 +22,23 @@ __plugin_meta__ = PluginMetadata(
     extra={"author": "lzylipu"},
 )
 
-SHARE_URL_REGEX = re.compile(
-    r"^(?:https://|http://)?pan\.quark\.cn/s/[0-9a-zA-Z]+"
-    r"(?:\?pwd=[0-9a-zA-Z]+)?"
-    r"(?:#/list/share/[0-9a-zA-Z]+)?$"
-)
+# 只匹配核心部分 pan.quark.cn/s/xxx
+QUARK_LINK_REGEX = re.compile(r"https?://pan\.quark\.cn/s/[0-9a-zA-Z]+")
 
+# 链接失效关键词 — QAS返回的错误信息中包含这些
+EXPIRED_KEYWORDS = [
+    "失效", "过期", "已取消", "已删除", "不存在", "已关闭",
+    "expired", "deleted", "cancelled", "not found", "closed",
+    "违规", "审核", "ban", "audit",
+]
+# QAS服务异常关键词
+SERVICE_ERROR_KEYWORDS = [
+    "cookie", "登录", "login", "unauthorized", "401", "403",
+    "服务端", "server", "500", "502", "503",
+    "连接", "timeout", "超时", "connect",
+]
 
-qas_handler = on_message(permission=SUPERUSER, block=True)
+qas_handler = on_message(permission=SUPERUSER, block=False, priority=10)
 
 
 def get_text(event: Event) -> str:
@@ -39,29 +48,55 @@ def get_text(event: Event) -> str:
         return str(getattr(event, "message", "")).strip()
 
 
+def _classify_error(err_msg: str) -> str:
+    """分类QAS错误信息"""
+    lower = err_msg.lower()
+    for kw in EXPIRED_KEYWORDS:
+        if kw in lower:
+            return "expired"
+    for kw in SERVICE_ERROR_KEYWORDS:
+        if kw in lower:
+            return "service"
+    return "unknown"
+
+
 @qas_handler.handle()
 async def handle_message(event: Event):
     text = get_text(event)
 
-    # 直接匹配夸克链接，无需触发词
-    if not SHARE_URL_REGEX.fullmatch(text):
+    match = QUARK_LINK_REGEX.search(text)
+    if not match:
         return
 
-    # 确保链接有协议头
-    shareurl = text
-    if not shareurl.startswith(("http://", "https://")):
-        shareurl = "https://" + shareurl
+    shareurl = match.group(0)
+    await qas_handler.send("\U0001f50d 检测链接...", at_sender=True)
 
     try:
         async with QASClient() as client:
-            # 先获取分享详情，取根目录名作为任务名
-            temp_task = TaskItem.simple_from_title("temp", shareurl)
-            detail = await client.get_share_detail(temp_task)
 
+            # ===== 1. 检测链接有效性 =====
+            try:
+                temp_task = TaskItem.simple_from_title("temp", shareurl)
+                detail = await client.get_share_detail(temp_task)
+            except QASException as e:
+                err_type = _classify_error(str(e))
+                if err_type == "expired":
+                    await qas_handler.send("\U0001f534 链接已失效", at_sender=True)
+                elif err_type == "service":
+                    await qas_handler.send(f"\u26a0 QAS服务异常: {e}", at_sender=True)
+                else:
+                    await qas_handler.send(f"\u2753 检测失败: {e}", at_sender=True)
+                return
+
+            # ===== 2. 链接有效（QAS已确认，get_share_detail不报错即有效） =====
+            share = detail.share
+            # 注意: 夸克share.status=1是正常，audit_status=4也是正常
+            # 链接有效性完全依赖QAS的get_share_detail返回判断
+
+            # ===== 3. 链接有效，开始转存 =====
             root_title = sanitize_title(detail.share.title)
+            file_count = getattr(share, "file_num", 0)
             task = TaskItem.simple_from_title(root_title, shareurl)
-
-            # 强制启用 aria2 自动下载
             task.addition = {
                 "aria2": {
                     "auto_download": True,
@@ -71,25 +106,56 @@ async def handle_message(event: Event):
                 }
             }
 
-            logger.info(f"Adding task: {task.taskname} | {shareurl}")
+            file_info = f" ({file_count}个文件)" if file_count else ""
+            logger.info(f"QAS: {task.taskname}{file_info} | {shareurl}")
+            await qas_handler.send(f"\U0001f4e5 {task.taskname}{file_info}", at_sender=True)
 
-            # 通知用户正在处理
-            await qas_handler.send("转存中…")
+            # ===== 4. 执行转存 =====
+            task_idx = None
+            try:
+                await client.add_task(task)
+                data = await client.get_data()
+                task_idx = len(data.tasklist)
 
-            # 添加 -> 执行 -> 删除（原子流程）
-            await client.add_task(task)
-            data = await client.get_data()
-            task_idx = len(data.tasklist)
+                script_output = []
+                async for res in client.run_script(task_idx):
+                    script_output.append(res)
 
-            async for _ in client.run_script(task_idx):
+            except QASException as e:
+                # 清理残留任务
+                if task_idx:
+                    try:
+                        await client.delete_task(task_idx)
+                    except Exception:
+                        pass
+                err_type = _classify_error(str(e))
+                if err_type == "service":
+                    await qas_handler.send(f"\u274c 转存服务异常: {e}", at_sender=True)
+                else:
+                    await qas_handler.send(f"\u274c 转存失败: {e}", at_sender=True)
+                return
+
+            # 清理任务
+            try:
+                await client.delete_task(task_idx)
+            except Exception:
                 pass
 
-            await client.delete_task(task_idx)
+            # ===== 5. 分析脚本结果 =====
+            full_output = "\n".join(script_output) if script_output else ""
+            lower_output = full_output.lower()
+            has_error = any(k in lower_output for k in ["失败", "error", "超时", "timeout", "异常"])
+            has_success = any(k in lower_output for k in ["成功", "完成", "下载", "转存", "save"])
+
+            if has_error and not has_success:
+                await qas_handler.send("\u274c 执行失败，请检查QAS日志", at_sender=True)
+            elif has_error and has_success:
+                await qas_handler.send("\u26a1 部分完成（有文件失败）", at_sender=True)
+            else:
+                await qas_handler.send("\u2705 转存完成", at_sender=True)
 
     except FinishedException:
         raise
     except Exception as e:
-        logger.error(f"QAS pipeline failed: {e}")
-        await qas_handler.finish("错")
-
-    await qas_handler.finish("好了")
+        logger.error(f"QAS unexpected: {e}")
+        await qas_handler.send(f"\U0001f4a5 运行错误: {e}", at_sender=True)
