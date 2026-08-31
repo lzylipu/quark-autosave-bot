@@ -1,20 +1,10 @@
-<div align="center">
-
 # 🍭 Quark AutoSave Bot
 
 **Telegram Bot for Quark Cloud Auto-Save**
 
 Forward Quark Cloud links and auto-save to your drive 🚀
 
-[![Python](https://img.shields.io/badge/python-3.12-blue.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
-[![NoneBot2](https://img.shields.io/badge/NoneBot2-2.4+-orange.svg?style=flat-square)](https://v2.nonebot.dev/)
-[![Docker](https://img.shields.io/docker/pulls/lzylipu/quarkbot?style=flat-square&logo=docker&logoColor=white)](https://hub.docker.com/r/lzylipu/quarkbot)
-[![License](https://img.shields.io/github/license/lzylipu/quark-autosave-bot?style=flat-square)](./LICENSE)
-[![GitHub](https://img.shields.io/badge/_repo-quark--autosave--bot-181717.svg?style=flat-square&logo=github&logoColor=white)](https://github.com/lzylipu/quark-autosave-bot)
-
 English · [简体中文](./README.md)
-
-</div>
 
 ---
 
