@@ -36,7 +36,7 @@ class Share(BaseModel):
     click_pv: int
     save_pv: int
     download_pv: int
-    first_file: dict[str, Any]
+    first_file: dict[str, Any] | None = None
 
 
 class FileItem(BaseModel):
