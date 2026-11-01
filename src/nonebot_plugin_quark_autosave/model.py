@@ -189,7 +189,8 @@ class TaskItem(BaseModel):
             replace="",
             enddate="",
             ignore_extension=False,
-            runweek=[],
+            # 全周有效：建任务后不论星期几都能跑，就算清理失败残留也不会变成“永不执行的僵尸任务”
+            runweek=[1, 2, 3, 4, 5, 6, 7],
             startfid="",
             addition={
                 "aria2": {

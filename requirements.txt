@@ -1,0 +1,6 @@
+# 运行时依赖固定版本，避免上游发新版把镜像构建/运行搞坏
+# 版本取自 PyPI 当前稳定版（2026-11），升级时请先跑本地测试再改
+httpx==0.28.1
+nonebot2[fastapi,httpx]==2.5.0
+nonebot-adapter-telegram==0.1.0b20
+nonebot-plugin-waiter==0.8.1

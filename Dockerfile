@@ -12,19 +12,25 @@ ENV TELEGRAM_BOT_TOKEN=""
 ENV QAS_ENDPOINT="http://quark-auto-save:5005"
 ENV QAS_TOKEN=""
 ENV QAS_PATH_BASE="夸克自动转存"
-ENV SIMPLE_COMMAND="1"
 ENV SIMPLE_SAVE_ROOT="自动"
+ENV QAS_RUN_TIMEOUT="1800"
+ENV DEDUPE_SECONDS="600"
+ENV ASK_PASSCODE="true"
+
+# 依赖先单独安装，利用 Docker 构建缓存
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r /app/requirements.txt
 
 COPY . /app
 
-RUN chmod +x /app/start.sh
+RUN chmod +x /app/start.sh && \
+    useradd --create-home --shell /usr/sbin/nologin appuser && \
+    chown -R appuser:appuser /app
 
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir \
-    "httpx>=0.27.0,<1.0.0" \
-    "nonebot-plugin-alconna>=0.59.4,<1.0.0" \
-    "nonebot2[fastapi,httpx]>=2.4.3,<3.0.0" \
-    "nonebot-adapter-telegram>=0.1.0b20" \
-    "nonebot-plugin-waiter>=0.8.1"
+USER appuser
+
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import os, socket, sys; s = socket.socket(); s.settimeout(5); sys.exit(0 if s.connect_ex(('127.0.0.1', int(os.environ.get('PORT', '8080')))) == 0 else 1)"
 
 CMD ["/bin/bash", "/app/start.sh"]
