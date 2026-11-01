@@ -1,16 +1,18 @@
 import re
 from time import monotonic
 
-from nonebot import logger, on_message
-from nonebot.adapters import Event
+from nonebot import get_driver, logger, on_message
+from nonebot.adapters import Bot, Event
 from nonebot.exception import FinishedException
-from nonebot.permission import SUPERUSER
+from nonebot.permission import Permission
+from nonebot.rule import Rule
 from nonebot.plugin import PluginMetadata, inherit_supported_adapters
 
 from .client import QASClient
 from .config import Config, plugin_config
 from .exception import QASException
 from .model import DetailInfo, TaskItem, sanitize_title
+from .perms import allow_user
 from .result import (
     classify_error,
     extract_passcode,
@@ -31,7 +33,25 @@ __plugin_meta__ = PluginMetadata(
     extra={"author": "lzylipu"},
 )
 
-qas_handler = on_message(permission=SUPERUSER, block=False, priority=10)
+
+def _is_private_chat(event: Event) -> bool:
+    """判断是否私聊（Telegram 适配器下 original_message.chat.type == private）。"""
+    chat = getattr(getattr(event, "original_message", None), "chat", None)
+    return getattr(chat, "type", None) == "private"
+
+
+async def _allowed(bot: Bot, event: Event) -> bool:
+    superusers = getattr(get_driver().config, "superusers", set())
+    return allow_user(str(event.get_user_id()), superusers, _is_private_chat(event))
+
+
+async def _reject_hint(bot: Bot, event: Event) -> bool:
+    """没权限但发了夸克链接：提示一下，免得以为 bot 挂了。"""
+    return bool(extract_share_url(get_text(event))) and not await _allowed(bot, event)
+
+
+qas_handler = on_message(permission=Permission(_allowed), block=False, priority=10)
+qas_reject = on_message(rule=Rule(_reject_hint), block=False, priority=11)
 
 # 分享 ID -> (完成时间, 任务名, 保存路径)，用于短时间内的重复链接去重
 _recent: dict[str, tuple[float, str, str]] = {}
@@ -200,3 +220,13 @@ async def handle_message(event: Event):
     finally:
         _inflight.pop(key, None)
         _prune_recent()
+
+
+@qas_reject.handle()
+async def handle_reject(event: Event):
+    user_id = str(event.get_user_id())
+    logger.info(f"QAS rejected message from {user_id}")
+    await qas_reject.send(
+        f"🔒 你没有使用权限。你的 TG 用户 ID 是 {user_id}，"
+        "把它填到 SUPERUSERS 里就能用了（填好后重启 bot）。"
+    )

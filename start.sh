@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
 set -e
 
+# SUPERUSER 可选：留空表示「私聊谁都能用」，填了就只认这些 TG 用户 ID。
+# 必须写成 JSON 列表，空值时给 [] 而不是 [""]，否则会变成一个叫空字符串的
+# 超级用户，结果谁都匹配不上。
+if [ -n "${SUPERUSER}" ]; then
+  SUPERUSERS_JSON="[\"${SUPERUSER}\"]"
+else
+  SUPERUSERS_JSON="[]"
+fi
+
 cat > /app/.env.prod <<ENDENV
 HOST=0.0.0.0
 PORT=${PORT:-8080}
-SUPERUSERS=["${SUPERUSER}"]
+SUPERUSERS=${SUPERUSERS_JSON}
 COMMAND_START=["/", ""]
 
 DRIVER=~fastapi+~httpx

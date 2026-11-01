@@ -39,7 +39,7 @@ English · [简体中文](./README.md)
 - ♻️ **Duplicate Guard** — Re-sending the same link returns the previous result instead of running again
 - ⏱️ **Overall Timeout** — A run exceeding `QAS_RUN_TIMEOUT` seconds is aborted with a clear message
 - 🔁 **Auto Retry** — Network errors and 5xx/429 are retried with backoff
-- 🔒 **Access Control** — Only the Superuser can trigger the bot
+- 🔒 **Optional Access Control** — leave `SUPERUSER` empty and private chats just work; set it to pin the allowed IDs (groups are always ignored)
 - ⬇️ **Aria2 Auto-Download** — Automatically downloads saved files via Aria2
 
 ---
@@ -64,14 +64,17 @@ quark-autosave-bot/
 │       └── docker.yml                 # GitHub Actions: test first, then build & push
 ├── 📁 tests/
 │   ├── conftest.py                    # NoneBot init (needed to import the plugin)
-│   ├── test_result.py                 # Link extraction / output parsing
+│   ├── test_result.py                 # Link extraction / parsing / error classification
 │   ├── test_client_requests.py        # Retry, error messages, run payload, timeout
-│   └── test_client_cleanup.py         # Task deletion and verification
+│   ├── test_client_cleanup.py         # Task deletion and verification
+│   ├── test_perms.py                  # Access rules (empty SUPERUSER = private chat allowed)
+│   └── test_plugin_helpers.py         # Passcode prompt, dedupe cache
 └── 📁 src/
     └── nonebot_plugin_quark_autosave/
         ├── __init__.py                # Pipeline: dedupe → verify → save → cleanup → report
         ├── client.py                  # QAS async client (retry / lock / timeout)
-        ├── result.py                  # Share URL extraction & QAS output parsing
+        ├── result.py                  # Share URL extraction, QAS output parsing, error classification
+        ├── perms.py                   # Access rules
         ├── config.py                  # Pydantic configuration model
         ├── model.py                   # Data models: TaskItem / DetailInfo / Addition
         └── exception.py               # Custom exception: QASException
@@ -105,7 +108,6 @@ User sends a Quark link ──→ Extract URL (keeps ?pwd= and #/ subfolder)
 docker run -d \
   --name quarkbot \
   -e TELEGRAM_BOT_TOKEN=*** \
-  -e SUPERUSER="your_telegram_user_id" \
   -e QAS_ENDPOINT="http://your-qas-address:5005" \
   -e QAS_TOKEN=*** \
   -e TZ=Asia/Shanghai \
@@ -136,7 +138,7 @@ docker compose up -d
 | Variable | Required | Default | Description |
 |----------|:--------:|---------|-------------|
 | `TELEGRAM_BOT_TOKEN` | ✅ | | Telegram Bot Token from [@BotFather](https://t.me/BotFather) |
-| `SUPERUSER` | ✅ | | Telegram User ID from [@userinfobot](https://t.me/userinfobot) |
+| `SUPERUSER` | | empty | Your Telegram User ID. Empty = anyone can use it in private chat; set = allow-list only |
 | `QAS_ENDPOINT` | ✅ | `http://quark-auto-save:5005` | QAS service address; change to actual address for standalone deploy |
 | `QAS_TOKEN` | ✅ | | Value of "Settings → API Token" in the QAS WebUI |
 | `SIMPLE_SAVE_ROOT` | | `自动` | Root folder name for saving to Quark drive |
@@ -226,6 +228,14 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 ---
 
 ## 📝 Changelog
+
+### v0.2.1
+
+- 🐛 Auth failure was reported as "link expired" (`Cookie 已失效` matched both keyword sets, wrong order)
+- 🔒 `SUPERUSER` is now optional: empty means private chats just work, no need to look up your ID first; groups never respond
+- 💬 An unauthorized user who sends a link gets their Telegram ID back, ready to paste into the config
+- 🐛 Fixed empty `SUPERUSER` producing `[""]`, which matched nobody
+- ✅ 32 unit tests: error classification, access rules, passcode, dedupe, delete verification
 
 ### v0.2.0
 

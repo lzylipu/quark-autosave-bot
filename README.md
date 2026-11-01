@@ -39,7 +39,7 @@
 - ♻️ **重复去重** — 同一条链接限时内重复发送，直接返回上次结果，不重复跑批
 - ⏱️ **整体超时保护** — 单次转存超过 `QAS_RUN_TIMEOUT` 秒自动放弃并告知，不会无限挂起
 - 🔁 **自动重试** — 网络异常与 5xx/429 自动退避重试，QAS 重启期间的请求不会直接失败
-- 🔒 **权限控制** — 仅 Superuser 可触发，安全可控
+- 🔒 **权限可选** — 留空 `SUPERUSER` = 私聊直接能用，不用先查自己的 ID；填了只认名单，群里一律不响应
 - ⬇️ **Aria2 自动下载** — 转存后通过 Aria2 自动下载到本地
 
 ---
@@ -64,14 +64,17 @@ quark-autosave-bot/
 │       └── docker.yml                 # GitHub Actions：先跑测试，再构建推送镜像
 ├── 📁 tests/
 │   ├── conftest.py                    # NoneBot 初始化（插件 import 需要）
-│   ├── test_result.py                 # 链接提取 / 输出解析
 │   ├── test_client_requests.py        # 重试、报错信息、执行参数、超时
-│   └── test_client_cleanup.py         # 任务删除与回读校验
+│   ├── test_client_cleanup.py         # 任务删除与回读校验
+│   ├── test_result.py                 # 链接提取 / 输出解析 / 错误分类
+│   ├── test_perms.py                  # 权限判定（空 SUPERUSER = 私聊放行）
+│   └── test_plugin_helpers.py         # 提取码追问、去重缓存
 └── 📁 src/
     └── nonebot_plugin_quark_autosave/
         ├── __init__.py                # 插件主逻辑：去重 → 检测 → 转存 → 清理 → 回执
         ├── client.py                  # QAS API 异步客户端（重试 / 并发锁 / 超时）
-        ├── result.py                  # 分享链接提取与 QAS 输出解析
+        ├── result.py                  # 分享链接提取、QAS 输出解析、错误分类
+        ├── perms.py                   # 权限判定
         ├── config.py                  # Pydantic 配置模型
         ├── model.py                   # 数据模型：TaskItem / DetailInfo / Addition
         └── exception.py               # 自定义异常 QASException
@@ -105,7 +108,6 @@ quark-autosave-bot/
 docker run -d \
   --name quarkbot \
   -e TELEGRAM_BOT_TOKEN=*** \
-  -e SUPERUSER="你的TG用户ID" \
   -e QAS_ENDPOINT="http://你的QAS地址:5005" \
   -e QAS_TOKEN=*** \
   -e TZ=Asia/Shanghai \
@@ -136,7 +138,7 @@ docker compose up -d
 | 变量 | 必填 | 默认值 | 说明 |
 |------|:----:|--------|------|
 | `TELEGRAM_BOT_TOKEN` | ✅ | | Telegram Bot Token，从 [@BotFather](https://t.me/BotFather) 获取 |
-| `SUPERUSER` | ✅ | | Telegram 用户 ID，从 [@userinfobot](https://t.me/userinfobot) 查询 |
+| `SUPERUSER` | | 空 | 你的 Telegram 用户 ID。留空 = 私聊谁都能用；填了就只认名单 |
 | `QAS_ENDPOINT` | ✅ | `http://quark-auto-save:5005` | QAS 服务地址；独立部署时改为实际地址 |
 | `QAS_TOKEN` | ✅ | | QAS WebUI「设置 → API 密钥」里的值 |
 | `SIMPLE_SAVE_ROOT` | | `自动` | 转存到网盘的根目录文件夹名 |
@@ -226,6 +228,14 @@ python -m pytest tests/ -q
 ---
 
 ## 📝 更新日志
+
+### v0.2.1
+
+- 🐛 修复登录态失效被误报成「链接已失效」（`Cookie 已失效` 同时命中两类关键词，顺序错了）
+- 🔒 `SUPERUSER` 改为可选：留空即私聊可用，不用先去查自己的 ID；群里始终不响应
+- 💬 没权限却发了链接时，bot 会回你的 TG 用户 ID，方便直接填进配置
+- 🐛 修复 `SUPERUSER` 留空时生成 `[""]` 导致谁都匹配不上的问题
+- ✅ 补 32 个单测：错误分类、权限判定、提取码、去重、删除校验
 
 ### v0.2.0
 
