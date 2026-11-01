@@ -12,10 +12,7 @@ from .config import Config, plugin_config
 from .exception import QASException
 from .model import DetailInfo, TaskItem, sanitize_title
 from .result import (
-    AUTH_ERROR_KEYWORDS,
-    EXPIRED_KEYWORDS,
-    PASSCODE_KEYWORDS,
-    contains_any,
+    classify_error,
     extract_passcode,
     extract_share_url,
     parse_run_output,
@@ -53,17 +50,6 @@ async def send(message: str) -> None:
     await qas_handler.send(message, at_sender=True)
 
 
-def _classify_error(err_msg: str) -> str:
-    """分类 QAS 错误信息。"""
-    if contains_any(err_msg, PASSCODE_KEYWORDS):
-        return "passcode"
-    if contains_any(err_msg, EXPIRED_KEYWORDS):
-        return "expired"
-    if contains_any(err_msg, AUTH_ERROR_KEYWORDS):
-        return "auth"
-    return "unknown"
-
-
 async def _ask_passcode() -> str | None:
     """在聊天里追问提取码；依赖不可用或超时则返回 None。"""
     if not plugin_config.ask_passcode:
@@ -86,7 +72,7 @@ async def _get_detail(client: QASClient, shareurl: str) -> tuple[str, DetailInfo
         return shareurl, await client.get_share_detail(task)
     except QASException as exc:
         message = str(exc)
-        if _classify_error(message) != "passcode" or extract_passcode(shareurl):
+        if classify_error(message) != "passcode" or extract_passcode(shareurl):
             raise
         logger.info(f"QAS requests passcode for {shareurl}")
 
@@ -124,7 +110,7 @@ async def _handle_share(shareurl: str, key: str) -> None:
         try:
             shareurl, detail = await _get_detail(client, shareurl)
         except QASException as exc:
-            err_type = _classify_error(str(exc))
+            err_type = classify_error(str(exc))
             if err_type == "passcode":
                 await send(f"🔑 {exc}")
             elif err_type == "expired":
@@ -163,7 +149,7 @@ async def _handle_share(shareurl: str, key: str) -> None:
         except QASException as exc:
             if task_added:
                 await _cleanup(client, task)
-            err_type = _classify_error(str(exc))
+            err_type = classify_error(str(exc))
             if err_type == "auth":
                 await send("🔒 夸克登录态失效，请到 QAS WebUI 重新登录后再发一次")
             elif err_type == "expired":

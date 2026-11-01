@@ -87,6 +87,22 @@ def contains_any(text: str, keywords: Iterable[str]) -> bool:
     return any(keyword.lower() in lower for keyword in keywords)
 
 
+def classify_error(err_msg: str) -> str:
+    """把 QAS 的错误文案分类成 passcode / auth / expired / unknown。
+
+    顺序不能换：登录态失效的文案是「Cookie 已失效」/「登录失效」，本身就含
+    EXPIRED_KEYWORDS 里的「失效」，先判 expired 会把它误报成「链接已失效」，
+    用户会以为是分享挂了而跑去重新分享。
+    """
+    if contains_any(err_msg, PASSCODE_KEYWORDS):
+        return "passcode"
+    if contains_any(err_msg, AUTH_ERROR_KEYWORDS):
+        return "auth"
+    if contains_any(err_msg, EXPIRED_KEYWORDS):
+        return "expired"
+    return "unknown"
+
+
 @dataclass
 class RunResult:
     """一次转存执行的结果。"""
@@ -98,11 +114,11 @@ class RunResult:
 
     @property
     def auth_failed(self) -> bool:
-        return bool(self.error) and contains_any(self.error, AUTH_ERROR_KEYWORDS)
+        return bool(self.error) and classify_error(self.error) == "auth"
 
     @property
     def expired(self) -> bool:
-        return bool(self.error) and contains_any(self.error, EXPIRED_KEYWORDS)
+        return bool(self.error) and classify_error(self.error) == "expired"
 
     def render(self, fallback_savepath: str | None = None) -> str:
         """转成给用户看的一句话（可带保存路径）。"""
