@@ -111,23 +111,22 @@ async def handle_message(event: Event):
             await qas_handler.send(f"\U0001f4e5 {task.taskname}{file_info}", at_sender=True)
 
             # ===== 4. 执行转存 =====
-            task_idx = None
+            task_added = False
             try:
                 await client.add_task(task)
-                data = await client.get_data()
-                task_idx = len(data.tasklist)
+                task_added = True
 
                 script_output = []
-                async for res in client.run_script(task_idx):
+                async for res in client.run_script(task):
                     script_output.append(res)
 
             except QASException as e:
                 # 清理残留任务
-                if task_idx:
+                if task_added:
                     try:
-                        await client.delete_task(task_idx)
-                    except Exception:
-                        pass
+                        await client.delete_task(task)
+                    except Exception as cleanup_error:
+                        logger.error(f"QAS cleanup failed after transfer error: {cleanup_error}")
                 err_type = _classify_error(str(e))
                 if err_type == "service":
                     await qas_handler.send(f"\u274c 转存服务异常: {e}", at_sender=True)
@@ -137,9 +136,14 @@ async def handle_message(event: Event):
 
             # 清理任务
             try:
-                await client.delete_task(task_idx)
-            except Exception:
-                pass
+                await client.delete_task(task)
+            except Exception as cleanup_error:
+                logger.error(f"QAS cleanup failed after transfer success: {cleanup_error}")
+                await qas_handler.send(
+                    f"⚠️ 转存已执行，但任务清理失败: {cleanup_error}",
+                    at_sender=True,
+                )
+                return
 
             # ===== 5. 分析脚本结果 =====
             full_output = "\n".join(script_output) if script_output else ""

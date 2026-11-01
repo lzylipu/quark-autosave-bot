@@ -61,24 +61,42 @@ class QASClient:
         response = await self._request_with_retry("POST", "/update", json=model_dump(data))
         return self._check_response(response).get("message", "ok")
 
-    async def delete_task(self, task_idx: int) -> str:
+    async def delete_task(self, task: TaskItem) -> str:
         data = await self.get_data()
-        if not (0 < task_idx <= len(data.tasklist)):
-            raise QASException(f"任务索引 {task_idx} 无效")
+        matching_count = sum(
+            item.taskname == task.taskname and item.shareurl == task.shareurl
+            for item in data.tasklist
+        )
+        task_idx = next(
+            (
+                idx
+                for idx in range(len(data.tasklist), 0, -1)
+                if data.tasklist[idx - 1].taskname == task.taskname
+                and data.tasklist[idx - 1].shareurl == task.shareurl
+            ),
+            None,
+        )
+        if task_idx is None:
+            raise QASException(f"未找到任务: {task.taskname}")
         task_item = data.tasklist.pop(task_idx - 1)
         await self.update(data)
+        remaining = await self.get_data()
+        remaining_count = sum(
+            item.taskname == task.taskname and item.shareurl == task.shareurl
+            for item in remaining.tasklist
+        )
+        if remaining_count != matching_count - 1:
+            raise QASException(f"任务删除未生效: {task.taskname}")
         return task_item.taskname
 
     async def list_tasks(self) -> list[TaskItem]:
         data = await self.get_data()
         return data.tasklist
 
-    async def run_script(self, task_idx: int | None = None):
+    async def run_script(self, task: TaskItem | None = None):
         payload = {}
-        if task_idx is not None:
-            data = await self.get_data()
-            idx = (task_idx - 1) % len(data.tasklist)
-            task_dict = model_dump(data.tasklist[idx])
+        if task is not None:
+            task_dict = model_dump(task)
             del task_dict["runweek"]
             payload["tasklist"] = [task_dict]
 
