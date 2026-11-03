@@ -32,7 +32,7 @@ class FakeConfig:
         async def get_data_raw():
             return {"tasklist": deepcopy(fake.tasklist), "webui": {"username": "u"}}
 
-        async def update_tasklist(tasklist):
+        async def update_tasklist(tasklist, *, removing=()):
             fake.writes += 1
             client._sanitize(tasklist)  # 真实实现同样会清洗
             if fake.persist:

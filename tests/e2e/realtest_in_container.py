@@ -113,14 +113,31 @@ async def main():
         for f in landed:
             if not f.get("fid"):
                 continue
-            try:
-                await c.delete_file(str(f["fid"]))
+            if await c.delete_file(str(f["fid"])):
                 removed += 1
-            except Exception as exc:
-                print("  删文件失败:", exc, flush=True)
-        left_files = await c.list_savepath_files(SAVEPATH)
+        # 删的是异步任务，且目录本身（转存时按分享结构建的）也要清掉
+        left_files = landed
+        for _ in range(10):
+            await asyncio.sleep(3)
+            left_files = await c.list_savepath_files(SAVEPATH)
+            if not left_files:
+                break
         check("自检文件已清理", len(left_files) == 0,
-              f"删了 {removed} 个，剩 {len(left_files)} 个")
+              f"删了 {removed}/{len(landed)} 个，剩 {len(left_files)} 个")
+        # 空目录壳也清掉（只看顶层）
+        top = await c._request_with_retry(
+            "GET", "/get_savepath_detail", params={"path": SAVEPATH}
+        )
+        top_list = (c._check_response(top) or {}).get("list") or []
+        for item in top_list:
+            if item.get("dir") and item.get("fid"):
+                await c.delete_file(str(item["fid"]))
+        await asyncio.sleep(4)
+        top = await c._request_with_retry(
+            "GET", "/get_savepath_detail", params={"path": SAVEPATH}
+        )
+        top_list = (c._check_response(top) or {}).get("list") or []
+        check("自检目录已清空", not top_list, f"剩 {[i.get('file_name') for i in top_list]}")
 
         # 9. 基线核对
         final = [(x.get("taskname"), x.get("shareurl"))

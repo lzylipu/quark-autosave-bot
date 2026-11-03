@@ -17,7 +17,7 @@ class RawClient(QASClient):
     async def get_data_raw(self):
         return {"tasklist": self.tasklist, "webui": {"username": "u"}}
 
-    async def update_tasklist(self, tasklist):
+    async def update_tasklist(self, tasklist, *, removing=()):
         self._sanitize(tasklist)
         for t in tasklist:
             if not isinstance(t.get("addition"), dict):
@@ -82,7 +82,7 @@ def test_add_task_payload_never_has_null_addition():
         async def get_data_raw(self):
             return {"tasklist": [], "webui": {"username": "u"}}
 
-        async def update_tasklist(self, tasklist):
+        async def update_tasklist(self, tasklist, *, removing=()):
             seen["tasklist"] = tasklist
             return "ok"
 
@@ -109,7 +109,7 @@ def test_add_task_does_not_use_server_side_append():
         async def get_data_raw(self):
             return {"tasklist": [dict(t) for t in existing]}
 
-        async def update_tasklist(self, tasklist):
+        async def update_tasklist(self, tasklist, *, removing=()):
             calls.append(tasklist)
             return "ok"
 
@@ -141,7 +141,7 @@ def test_delete_retries_when_qasx_writes_task_back(monkeypatch):
             super().__init__(tasklist)
             self.resurrect_times = resurrect_times
 
-        async def update_tasklist(self, tasklist):
+        async def update_tasklist(self, tasklist, *, removing=()):
             res = await super().update_tasklist(tasklist)
             if self.resurrect_times > 0 and not any(
                 t["taskname"] == "victim" for t in tasklist
@@ -180,7 +180,7 @@ def test_add_task_payload_carries_update_subdir():
         async def get_data_raw(self):
             return {"tasklist": []}
 
-        async def update_tasklist(self, tasklist):
+        async def update_tasklist(self, tasklist, *, removing=()):
             seen["tasklist"] = tasklist
             return "ok"
 
@@ -189,3 +189,81 @@ def test_add_task_payload_carries_update_subdir():
 
     asyncio.run(run())
     assert seen["tasklist"][-1]["update_subdir"] == ".*"
+
+
+def test_delete_task_does_not_report_intentional_removal_as_lost(monkeypatch):
+    """删自己这条任务不该报「丢失了其他任务」——之前真机上刷了假 error。"""
+    import asyncio
+
+    import httpx
+
+    from nonebot_plugin_quark_autosave import client as client_mod
+
+    monkeypatch.setattr(client_mod, "DELETE_VERIFY_DELAY", 0)
+    errors = []
+    monkeypatch.setattr(client_mod.logger, "error", lambda msg: errors.append(msg))
+
+    state = {"tasklist": [_task("a", "u1"), _task("victim", "u3")]}
+
+    class Real(QASClient):
+        async def get_data_raw(self):
+            return {"tasklist": [dict(t) for t in state["tasklist"]]}
+
+        async def _request_with_retry(self, method, url, **kw):
+            assert url == "/update"
+            state["tasklist"] = [dict(t) for t in kw["json"]["tasklist"]]
+            return httpx.Response(200, json={"success": True, "data": {"message": "ok"}})
+
+    asyncio.run(Real().delete_task(TaskItem(taskname="victim", shareurl="u3", savepath="/x")))
+    assert [t["taskname"] for t in state["tasklist"]] == ["a"]
+    assert not errors, errors
+
+
+def test_update_tasklist_reports_real_concurrent_loss(monkeypatch):
+    """别的写入者把任务吞了，必须报 error（这是真有并发时的护栏）。"""
+    import asyncio
+
+    import httpx
+
+    from nonebot_plugin_quark_autosave import client as client_mod
+
+    errors = []
+    monkeypatch.setattr(client_mod.logger, "error", lambda msg: errors.append(msg))
+
+    state = {"tasklist": [_task("a", "u1"), _task("b", "u2"), _task("victim", "u3")]}
+
+    class Real(QASClient):
+        async def get_data_raw(self):
+            return {"tasklist": [dict(t) for t in state["tasklist"]]}
+
+        async def _request_with_retry(self, method, url, **kw):
+            # 服务端写回时把 b 弄丢了（模拟内存态覆盖）
+            state["tasklist"] = [
+                dict(t) for t in kw["json"]["tasklist"] if t["taskname"] != "b"
+            ]
+            return httpx.Response(200, json={"success": True, "data": {"message": "ok"}})
+
+    asyncio.run(
+        Real().update_tasklist(
+            [_task("a", "u1"), _task("victim", "u3")], removing=["victim"]
+        )
+    )
+    assert any("丢失了其他任务" in e and "b" in e for e in errors), errors
+
+
+def test_delete_file_reads_raw_quark_response():
+    """/delete_file 不像其它接口那样包 success/data，是夸克原始响应（code==0）。"""
+    import asyncio
+
+    import httpx
+
+    class Cap(QASClient):
+        def __init__(self, payload):
+            self.payload = payload
+
+        async def _request_with_retry(self, method, url, **kw):
+            assert url == "/delete_file"
+            return httpx.Response(200, json=self.payload)
+
+    assert asyncio.run(Cap({"status": 200, "code": 0, "data": {"finish": False}}).delete_file("f1"))
+    assert not asyncio.run(Cap({"status": 400, "code": 23004, "message": "文件不存在"}).delete_file("f2"))
