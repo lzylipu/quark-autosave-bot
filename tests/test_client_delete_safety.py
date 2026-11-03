@@ -74,24 +74,52 @@ def test_add_task_payload_never_has_null_addition():
     """add_task 不能把 addition 写成 null，否则后续任何 /update 都会 500。"""
     import asyncio
 
+    from nonebot_plugin_quark_autosave.model import TaskItem as T
+
     seen = {}
 
     class Cap(QASClient):
-        async def _request_with_retry(self, method, url, **kw):
-            seen["json"] = kw.get("json")
-            from nonebot_plugin_quark_autosave.model import TaskItem as T
+        async def get_data_raw(self):
+            return {"tasklist": [], "webui": {"username": "u"}}
 
-            class R:
-                status_code = 200
-
-                @staticmethod
-                def json():
-                    return {"success": True, "data": seen["json"]}
-
-            return R()
+        async def update_tasklist(self, tasklist):
+            seen["tasklist"] = tasklist
+            return "ok"
 
     async def run():
-        await Cap().add_task(TaskItem(taskname="t", shareurl="u", savepath="/x", addition=None))
+        await Cap().add_task(T(taskname="t", shareurl="u", savepath="/x", addition=None))
 
     asyncio.run(run())
-    assert seen["json"]["addition"] == {}
+    assert seen["tasklist"][-1]["addition"] == {}
+
+
+def test_add_task_does_not_use_server_side_append():
+    """add_task 必须先读文件再写回，不能走 /api/add_task 的内存态 append。
+
+    实测：QASx 内存态落后于配置文件时，/api/add_task 会把文件里其他任务整份覆盖掉。
+    """
+    import asyncio
+
+    from nonebot_plugin_quark_autosave.model import TaskItem as T
+
+    existing = [{"taskname": "别人刚加的", "shareurl": "u-x", "savepath": "/x", "addition": {}}]
+    calls = []
+
+    class Cap(QASClient):
+        async def get_data_raw(self):
+            return {"tasklist": [dict(t) for t in existing]}
+
+        async def update_tasklist(self, tasklist):
+            calls.append(tasklist)
+            return "ok"
+
+        async def _request_with_retry(self, method, url, **kw):
+            calls.append(("RAW", url))
+            raise AssertionError(f"不该调 {url}")
+
+    async def run():
+        await Cap().add_task(T(taskname="new", shareurl="u-new", savepath="/x"))
+
+    asyncio.run(run())
+    assert len(calls) == 1, f"应只调用一次 update_tasklist，实际 {calls}"
+    assert [t["taskname"] for t in calls[0]] == ["别人刚加的", "new"]

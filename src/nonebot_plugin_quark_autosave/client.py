@@ -133,13 +133,25 @@ class QASClient:
     # ---------- 业务接口 ----------
 
     async def add_task(self, task: TaskItem) -> TaskItem:
+        """加任务：走「读文件 → append → 写回」，不用 /api/add_task。
+
+        为什么不用 /api/add_task：它是 `config_data["tasklist"].append(...)` 后再
+        `write_json`，用的是**服务进程内存态**。一旦配置文件被别的写入者（另一个
+        bot、手动改文件、订阅流程）改过而服务没重载，内存就是旧的，append 写盘会
+        把别人的改动整份覆盖掉——实测在正式环境吞过一个任务。
+        改成先读文件再写回，服务端内存会被本次 payload 纠正成文件内容。
+        """
         async with _config_lock():
+            raw = await self.get_data_raw()
+            tasklist = raw.get("tasklist")
+            tasklist = list(tasklist) if isinstance(tasklist, list) else []
             payload = model_dump(task)
             # 不能发 addition=null，否则之后任何 /update 都会被 QASx 的
-            # sync_task_plugins_config() 打 500（见 _sanitize_tasklist 注释）
+            # sync_task_plugins_config() 打 500（见 _sanitize 注释）
             payload["addition"] = payload.get("addition") or {}
-            response = await self._request_with_retry("POST", "/api/add_task", json=payload)
-            return TaskItem(**self._check_response(response))
+            tasklist.append(payload)
+            await self.update_tasklist(tasklist)
+            return TaskItem(**payload)
 
     async def get_share_detail(self, task: TaskItem) -> DetailInfo:
         payload = ShareDetailPayload(shareurl=task.shareurl, task=task)
@@ -236,11 +248,30 @@ class QASClient:
         return self._check_response(response).get("message", "ok")
 
     async def update_tasklist(self, tasklist: list[dict[str, Any]]) -> str:
-        """只写回 tasklist（原始 dict，其余字段不动）。"""
+        """只写回 tasklist（原始 dict，其余字段不动）。
+
+        QASx 的 /update 是「内存态 + 整份写盘」，遇到别的写入者并发改配置会互相覆盖。
+        这里在写前记下服务端当前的完整配置，写后回读，发现「我没打算删的任务消失了」
+        就抛错，别让它静默吞数据。
+        """
+        before = await self.get_data_raw()
+        before_tasks = [(t.get("taskname"), t.get("shareurl"))
+                        for t in (before.get("tasklist") or []) if isinstance(t, dict)]
+        expected = {(t.get("taskname"), t.get("shareurl"))
+                    for t in tasklist if isinstance(t, dict)}
+
         response = await self._request_with_retry(
             "POST", "/update", json={"tasklist": self._sanitize(tasklist)}
         )
-        return self._check_response(response).get("message", "ok")
+        message = self._check_response(response).get("message", "ok")
+
+        after = await self.get_data_raw()
+        after_set = {(t.get("taskname"), t.get("shareurl"))
+                     for t in (after.get("tasklist") or []) if isinstance(t, dict)}
+        lost = [pair for pair in before_tasks if pair not in expected and pair not in after_set]
+        if lost:
+            logger.error(f"QASx 配置写回时丢失了其他任务: {lost}（可能有并发写入者）")
+        return message
 
     @staticmethod
     def _same_task(left: Any, right: TaskItem | dict[str, Any]) -> bool:

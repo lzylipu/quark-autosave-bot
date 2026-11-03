@@ -9,7 +9,7 @@ services:
       SUPERUSER: "${SUPERUSER}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
       QAS_ENDPOINT: "${QAS_ENDPOINT:-http://quark-auto-save:5005}"
-      # 与 QAS WebUI「设置 → API 密钥」里的值保持一致
+      # QASx 的 api_token（登录 WebUI 后访问 /data 复制 api_token 字段）
       QAS_TOKEN: "${QAS_TOKEN}"
       SIMPLE_SAVE_ROOT: "${SIMPLE_SAVE_ROOT:-自动}"
       # 单次转存整体超时（秒）
