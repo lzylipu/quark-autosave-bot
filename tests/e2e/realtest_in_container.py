@@ -14,7 +14,10 @@ from nonebot_plugin_quark_autosave.model import TaskItem
 from nonebot_plugin_quark_autosave.result import parse_run_output
 from nonebot_plugin_quark_autosave import subscribe as sub
 
-SAVEPATH = "/自动/_bot自检"
+# 每轮用独立目录：QASx 有「转存记录」数据库（file_id + savepath 命中就跳过），
+# 用同一个目录重跑会直接打印「没有新的文件需要转存」，测不到真转存。
+_RUN_TAG = __import__("datetime").datetime.now().strftime("%m%d%H%M")
+SAVEPATH = f"/自动/_bot自检{_RUN_TAG}"
 NAME = "_bot自检_转存"
 OK, FAIL = [], []
 

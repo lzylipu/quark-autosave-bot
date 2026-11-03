@@ -325,16 +325,17 @@ class QASClient:
             and _get(left, "shareurl") == _get(right, "shareurl")
         )
 
-    async def delete_task(self, task: TaskItem, *, verify_rounds: int = 3) -> str:
-        """按任务身份（名称 + 分享链接）删除，并回读校验确实少了一条。
+    async def delete_task(self, task: TaskItem, *, verify_rounds: int = 15) -> str:
+        """按任务身份（名称 + 分享链接）删除，并回读校验确实没了。
 
         走原始 dict 写回：既避免丢 QASx 维护的字段，也避免 addition=null 触发
         /update 500（见 _sanitize）。
 
-        verify_rounds：QASx 主进程内存里也有一份 config_data，它跑完一轮任务 /
-        刷新订阅信息时会**整份写回**磁盘。外部删掉的任务如果正好撞上这次写回，
-        就会「复活」。所以删完不是看一次就完，而是隔一会儿再回读，发现复活就
-        再删一次，最多 verify_rounds 轮。
+        为什么要反复复查：QASx 主进程内存里也有一份 config_data，`/update` 之后它会
+        起后台线程（元数据匹配、日历初始化）再整份写盘。这些线程手里还攥着**写盘前**
+        的任务列表，于是刚删掉的任务会被写回去——实测在正式环境一次删不掉，
+        隔 1.5s/3s 回读都还在。这里改成「删 → 等 → 回读 → 还在就再删」，
+        verify_rounds 次仍删不掉才报错（总窗口约 3 分钟）。
         """
         async with _config_lock():
             raw = await self.get_data_raw()
@@ -354,7 +355,8 @@ class QASClient:
             expected_left = len(matched) - 1
 
             for round_no in range(1, verify_rounds + 1):
-                await asyncio.sleep(DELETE_VERIFY_DELAY * round_no)
+                # 前几轮等短一点（后台线程通常几秒内就写完了），后面拉长
+                await asyncio.sleep(min(DELETE_VERIFY_DELAY * round_no, 20))
                 after = (await self.get_data_raw()).get("tasklist") or []
                 left = [item for item in after if self._same_task(item, task)]
                 if len(left) <= expected_left:
