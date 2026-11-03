@@ -17,6 +17,9 @@ from nonebot_plugin_quark_autosave.result import parse_run_output
 
 NAME = "_bot自检_转存"
 SAVEPATH = "/自动/_bot自检"
+# QASx 转存记录按 file_id+taskname 去重，重复用同一个分享会直接跳过（正常行为）。
+# 自检要测「真的转存成功」，就避开之前用过的分享。
+USED_FILE = "/app/used_shares.json"
 OK, FAIL = [], []
 
 
@@ -31,12 +34,19 @@ async def main():
                 for t in (await c.get_data_raw()).get("tasklist") or []]
         print(f"基线任务 {len(base)} 个\n", flush=True)
 
-        sug = await c.task_suggestions("幻视")
+        import json as _json
+        import os as _os
+        used = []
+        if _os.path.exists(USED_FILE):
+            used = _json.load(open(USED_FILE))
+        print(f"已用过的分享 {len(used)} 个", flush=True)
+
+        sug = await c.task_suggestions(_os.environ.get("SELFTEST_QUERY", "幻视"))
         check("搜索有结果", len(sug) > 0, f"{len(sug)} 条")
         best = None
         for s in sug[:10]:
-            url = str(s.get("shareurl") or "")
-            if not url:
+            url = str(s.get("shareurl") or "").split("#", 1)[0]
+            if not url or url in used:
                 continue
             try:
                 files = await c.get_share_files(url, max_depth=3, max_dirs=12)
@@ -55,6 +65,8 @@ async def main():
         total_gb, shareurl, n_video = best
         print(f"选中 {total_gb/1024**3:.2f}GB / {n_video} 个视频\n{shareurl}\n", flush=True)
 
+        used.append(shareurl)
+        _json.dump(used, open(USED_FILE, "w"))
         task = TaskItem.simple_from_title(NAME, shareurl)
         task.taskname = NAME
         task.savepath = SAVEPATH
