@@ -18,7 +18,9 @@ from nonebot_plugin_quark_autosave import subscribe as sub
 # 用同一个目录重跑会直接打印「没有新的文件需要转存」，测不到真转存。
 _RUN_TAG = __import__("datetime").datetime.now().strftime("%m%d%H%M")
 SAVEPATH = f"/自动/_bot自检{_RUN_TAG}"
-NAME = "_bot自检_转存"
+# 任务名也要每轮唯一：QASx 的转存记录按 file_id + taskname 查重，
+# 同名重跑会被判定「已经转存过」直接跳过
+NAME = f"_bot自检_转存{_RUN_TAG}"
 OK, FAIL = [], []
 
 
@@ -63,7 +65,7 @@ async def main():
         print(f"\n选中最小的：{total_gb/1024**3:.2f}GB / {n_video} 个视频\n{shareurl}\n", flush=True)
 
         # 3. 建任务（用 bot 自己的建任务口径：带 update_subdir）
-        t = TaskItem.simple_from_title("_bot自检_转存", shareurl)
+        t = TaskItem.simple_from_title(NAME, shareurl)
         t.taskname = NAME
         t.savepath = SAVEPATH
         print(f"任务字段 update_subdir={t.update_subdir!r} pattern={t.pattern!r} "
