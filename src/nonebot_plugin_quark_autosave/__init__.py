@@ -21,6 +21,18 @@ from .result import (
     share_key,
     with_passcode,
 )
+from .subscribe import (
+    Candidate,
+    SubscriptionStore,
+    assess_share,
+    episodes_of,
+    fmt_episodes,
+    pick_best,
+    rename_rules,
+    seconds_until,
+    split_season,
+    video_names_from_dir,
+)
 
 __plugin_meta__ = PluginMetadata(
     name="夸克自动转存",
@@ -230,3 +242,199 @@ async def handle_reject(event: Event):
         f"🔒 你没有使用权限。你的 TG 用户 ID 是 {user_id}，"
         "把它填到 SUPERUSERS 里就能用了（填好后重启 bot）。"
     )
+
+
+
+# ======================================================================
+# 追剧订阅：AD / DL / LIST 命令 + 每天定时搜索补缺转存
+# ======================================================================
+
+store = SubscriptionStore(plugin_config.sub_store_file)
+
+_SUB_CMD_RE = re.compile(r"^\s*(AD|DL|LIST)(?=\s|$)\s*(.*)$", re.IGNORECASE | re.DOTALL)
+
+
+async def _is_sub_command(bot: Bot, event: Event) -> bool:
+    return bool(_SUB_CMD_RE.match(get_text(event)))
+
+
+sub_handler = on_message(
+    rule=Rule(_is_sub_command), permission=Permission(_allowed), priority=9, block=True
+)
+
+
+def _chat_id_of(event: Event) -> str | None:
+    """取真正能用来发消息的 chat id。
+
+    注意不能用 get_session_id()：Telegram 适配器返回的是 "private_<id>" 这种
+    会话标识，直接当 chat_id 发消息会 400。
+    """
+    chat = getattr(event, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    if chat_id is None:
+        chat_id = getattr(getattr(event, "original_message", None), "chat", None)
+        chat_id = getattr(chat_id, "id", None)
+    return str(chat_id) if chat_id is not None else None
+
+
+@sub_handler.handle()
+async def handle_sub_command(event: Event):
+    match = _SUB_CMD_RE.match(get_text(event))
+    cmd, arg = match.group(1).upper(), match.group(2).strip()
+
+    if cmd == "AD":
+        # 记住会话，定时任务的报告发回这里
+        if chat_id := _chat_id_of(event):
+            store.set_chat_id(chat_id)
+        _, msg = store.add(arg)
+        await sub_handler.finish(msg)
+
+    if cmd == "DL":
+        _, msg = store.remove(arg)
+        await sub_handler.finish(msg)
+
+    names = store.list_all()
+    if not names:
+        await sub_handler.finish("📭 订阅列表是空的，用「AD 片名」订阅")
+    data = store.load()
+    lines = [f"📋 订阅列表（每天 {plugin_config.sub_check_time} 自动执行）:"]
+    for i, name in enumerate(names, 1):
+        last = data.get(name, {}).get("last_result", "")
+        lines.append(f"{i}. {name}" + (f"\n   └ 上次: {last}" if last else "\n   └ 还没跑过"))
+    await sub_handler.finish("\n".join(lines))
+
+
+async def _run_one_subscription(client: QASClient, name: str) -> str:
+    """跑一个订阅：扫本地 → 搜索 → 筛大小 → 选能补最多的 → 转存 → 删任务。"""
+    title, season = split_season(name)
+    savepath = f"/{plugin_config.simple_save_root}/{sanitize_title(title)}"
+
+    # 1. 本地已有哪几集
+    local_files = await client.list_savepath_files(savepath)
+    local_eps = episodes_of(video_names_from_dir(local_files))
+    local_desc = f"本地已有 {fmt_episodes(local_eps)}" if local_eps else "本地还没有剧集"
+
+    # 2. 搜资源
+    try:
+        results = await client.task_suggestions(title)
+    except QASException as exc:
+        return f"❌ 搜索失败: {exc}\n　　{local_desc}"
+    if not results:
+        return f"❌ 没搜到「{title}」的资源\n　　{local_desc}"
+
+    # 3. 逐个探分享：大小合格 + 能补几集
+    candidates: list[Candidate] = []
+    checked = 0
+    for item in results[: plugin_config.sub_max_candidates]:
+        shareurl = str(item.get("shareurl", "")).strip()
+        if not shareurl:
+            continue
+        checked += 1
+        try:
+            files = await client.get_share_files(shareurl)
+        except QASException as exc:
+            # 链接失效是常态，换下一个
+            logger.info(f"订阅[{name}] 跳过分享 {shareurl}: {exc}")
+            continue
+        candidates.append(
+            assess_share(
+                shareurl,
+                files,
+                local_eps,
+                plugin_config.sub_min_size_gb,
+                plugin_config.sub_max_size_gb,
+            )
+        )
+
+    best = pick_best(candidates)
+    if best is None:
+        if not candidates:
+            return f"❌ 检查了 {checked} 个分享，全部打不开（链接失效）\n　　{local_desc}"
+        if not any(c.size_ok for c in candidates):
+            return (
+                f"❌ 检查了 {checked} 个分享，都不在 "
+                f"{plugin_config.sub_min_size_gb}~{plugin_config.sub_max_size_gb}G 区间\n　　{local_desc}"
+            )
+        return f"✅ 已经是最新，没有新集\n　　{local_desc}"
+
+    # 4. 建任务（统一重命名成 SxxExx）→ 转存 → 删任务
+    task = TaskItem.simple_from_title(title, best.shareurl)
+    task.taskname = sanitize_title(title)
+    task.savepath = savepath
+    task.pattern, task.replace = rename_rules(season)
+    # 交给 QASx 任务默认配置；注意别写成 None —— null 会让 QASx 的 /update 直接 500
+    task.addition = {}
+
+    new_desc = f"新增 {fmt_episodes(best.new_episodes)}（{len(best.new_episodes)} 集）"
+    logger.info(f"订阅[{name}] 选中 {best.shareurl} {new_desc}")
+
+    try:
+        await client.add_task(task)
+    except QASException as exc:
+        return f"❌ 添加任务失败: {exc}\n　　{local_desc}"
+
+    script_output: list[str] = []
+    try:
+        async for chunk in client.run_script(task):
+            script_output.append(chunk)
+    except QASException as exc:
+        await _cleanup(client, task)
+        return f"❌ 转存失败: {exc}\n　　{local_desc}"
+
+    cleaned = await _cleanup(client, task)
+    result = parse_run_output(script_output)
+    lines = [result.render(fallback_savepath=savepath).strip(), f"　　{local_desc} → {new_desc}"]
+    if not cleaned:
+        lines.append("　　⚠️ 任务未从 QAS 删除，请手动清理")
+    return "\n".join(lines)
+
+
+async def _report(text: str) -> None:
+    chat_id = store.get_chat_id()
+    if not chat_id:
+        logger.info(f"订阅报告（无会话记录，只打日志）: {text}")
+        return
+    try:
+        import nonebot
+
+        bot = nonebot.get_bot()
+        await bot.call_api("send_message", chat_id=chat_id, text=text)
+    except Exception as exc:
+        logger.error(f"订阅报告发送失败: {exc}")
+
+
+async def _run_all_subscriptions() -> None:
+    names = store.list_all()
+    if not names:
+        logger.info("订阅列表为空，跳过本轮")
+        return
+    logger.info(f"开始执行订阅任务: {names}")
+    async with QASClient() as client:
+        for name in names:
+            try:
+                report = await _run_one_subscription(client, name)
+            except Exception as exc:
+                logger.exception(f"订阅[{name}] 执行异常: {exc}")
+                report = f"💥 执行异常: {exc}"
+            store.record_result(name, report.splitlines()[0])
+            await _report(f"📺「{name}」\n{report}")
+
+
+@get_driver().on_startup
+async def _start_subscription_scheduler() -> None:
+    import asyncio
+
+    names = store.list_all()
+    logger.info(
+        f"订阅定时器已启动，共 {len(names)} 个订阅，每天 {plugin_config.sub_check_time} 执行"
+    )
+
+    async def _loop():
+        while True:
+            await asyncio.sleep(seconds_until(plugin_config.sub_check_time))
+            try:
+                await _run_all_subscriptions()
+            except Exception as exc:
+                logger.exception(f"订阅任务执行失败: {exc}")
+
+    asyncio.get_running_loop().create_task(_loop())

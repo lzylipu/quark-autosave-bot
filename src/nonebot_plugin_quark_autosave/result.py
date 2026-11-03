@@ -137,7 +137,7 @@ class RunResult:
         elif self.status == "skipped":
             return "⏭ QAS 跳过了这次执行，请检查该任务的执行周期/进度设置"
         else:
-            return "⚠️ 转存已执行，但没解析到结果，请查看 QAS 日志"
+            return "⚠️ 没解析到转存结果（QAS 既没报成功也没报失败），请去 QAS 日志确认。常见原因是夸克登录态失效"
 
         savepath = self.savepath or fallback_savepath
         if savepath:

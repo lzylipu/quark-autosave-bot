@@ -16,6 +16,11 @@ ENV SIMPLE_SAVE_ROOT="自动"
 ENV QAS_RUN_TIMEOUT="1800"
 ENV DEDUPE_SECONDS="600"
 ENV ASK_PASSCODE="true"
+ENV SUB_CHECK_TIME="17:00"
+ENV SUB_MIN_SIZE_GB="1.5"
+ENV SUB_MAX_SIZE_GB="8.0"
+ENV SUB_MAX_CANDIDATES="10"
+ENV SUB_STORE_FILE="/app/data/subscriptions.json"
 
 # 依赖先单独安装，利用 Docker 构建缓存
 COPY requirements.txt /app/requirements.txt
@@ -24,7 +29,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 COPY . /app
 
-RUN chmod +x /app/start.sh && \
+RUN mkdir -p /app/data && chmod +x /app/start.sh && \
     useradd --create-home --shell /usr/sbin/nologin appuser && \
     chown -R appuser:appuser /app
 

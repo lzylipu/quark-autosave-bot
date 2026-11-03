@@ -17,6 +17,17 @@ services:
       # 同一链接多少秒内重复发送时直接返回上次结果
       DEDUPE_SECONDS: "${DEDUPE_SECONDS:-600}"
       ASK_PASSCODE: "${ASK_PASSCODE:-true}"
+      # ===== 追剧订阅 =====
+      # 每天几点跑订阅（HH:MM，容器时区）
+      SUB_CHECK_TIME: "${SUB_CHECK_TIME:-17:00}"
+      # 每集大小区间（GB）
+      SUB_MIN_SIZE_GB: "${SUB_MIN_SIZE_GB:-1.5}"
+      SUB_MAX_SIZE_GB: "${SUB_MAX_SIZE_GB:-8.0}"
+      # 每个订阅最多检查多少个搜索结果
+      SUB_MAX_CANDIDATES: "${SUB_MAX_CANDIDATES:-10}"
+    volumes:
+      # 订阅列表持久化，重建容器不丢
+      - bot-data:/app/data
     restart: unless-stopped
     depends_on: [quark-auto-save]
     networks: [quark-net]
@@ -37,5 +48,6 @@ networks:
   quark-net:
 
 volumes:
+  bot-data:
   qas-config:
   qas-downloads:

@@ -43,6 +43,8 @@ class FileItem(BaseModel):
     fid: str
     file_name: str
     updated_at: int
+    size: int = 0
+    dir: bool = False
     file_name_re: str | None = None
     file_name_saved: str | None = None
 

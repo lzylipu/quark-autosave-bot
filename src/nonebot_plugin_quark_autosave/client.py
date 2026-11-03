@@ -7,7 +7,7 @@ import httpx
 from nonebot import logger
 from nonebot.compat import model_dump
 
-from .model import TaskItem, DetailInfo, AutosaveData, ShareDetailPayload
+from .model import TaskItem, DetailInfo, AutosaveData, ShareDetailPayload, FileItem
 from .config import plugin_config
 from .exception import QASException
 
@@ -41,6 +41,18 @@ def _config_lock() -> asyncio.Lock:
         lock = asyncio.Lock()
         _config_locks[loop] = lock
     return lock
+
+
+def _sanitize_tasklist(payload: dict[str, Any]) -> None:
+    """兼容旧调用点：写回配置前把 addition=null 修成 {}。
+
+    实测（x1ao4/quark-auto-save-x 的 app/run.py:2477 `sync_task_plugins_config`）：
+        for plugin_name in list(task["addition"].keys()):
+    只要**配置里任何一个任务**的 `addition` 是 null，`/update` 就直接 500，
+    整份配置写不进去——连带「删除任务」也会失败。原版 WebUI 保存的任务都是
+    `{}`，所以平时看不出来；API 写入 null 才会踩到。
+    """
+    QASClient._sanitize(payload.get("tasklist") or [])
 
 
 class QASClient:
@@ -122,7 +134,11 @@ class QASClient:
 
     async def add_task(self, task: TaskItem) -> TaskItem:
         async with _config_lock():
-            response = await self._request_with_retry("POST", "/api/add_task", json=model_dump(task))
+            payload = model_dump(task)
+            # 不能发 addition=null，否则之后任何 /update 都会被 QASx 的
+            # sync_task_plugins_config() 打 500（见 _sanitize_tasklist 注释）
+            payload["addition"] = payload.get("addition") or {}
+            response = await self._request_with_retry("POST", "/api/add_task", json=payload)
             return TaskItem(**self._check_response(response))
 
     async def get_share_detail(self, task: TaskItem) -> DetailInfo:
@@ -130,33 +146,137 @@ class QASClient:
         response = await self._request_with_retry("POST", "/get_share_detail", json=model_dump(payload))
         return DetailInfo(**self._check_response(response))
 
+    async def task_suggestions(self, query: str) -> list[dict[str, Any]]:
+        """按片名搜索资源（QASx 聚合 CloudSaver/PanSou 的接口，同 WebUI）。"""
+        response = await self._request_with_retry("GET", "/task_suggestions", params={"q": query})
+        data = self._check_response(response)
+        if not isinstance(data, list):
+            return []
+        return [item for item in data if isinstance(item, dict) and item.get("shareurl")]
+
+    async def list_savepath_files(self, savepath: str) -> list[dict[str, Any]]:
+        """列出网盘某个保存目录里的文件（用于判断本地已有哪几集）。
+
+        目录还不存在（首次订阅）时 QASx 会报错，这里当作「一集都没有」。
+        """
+        try:
+            response = await self._request_with_retry(
+                "GET", "/get_savepath_detail", params={"path": savepath}
+            )
+            data = self._check_response(response)
+        except QASException as exc:
+            logger.info(f"保存目录 {savepath} 读取失败（可能还不存在）: {exc}")
+            return []
+        if not isinstance(data, dict):
+            return []
+        if data.get("error"):
+            logger.info(f"保存目录 {savepath} 不存在: {data['error']}")
+            return []
+        files = data.get("list")
+        return [f for f in files if isinstance(f, dict)] if isinstance(files, list) else []
+
+    async def get_share_files(
+        self, shareurl: str, max_depth: int = 3, max_dirs: int = 40
+    ) -> list[FileItem]:
+        """取分享里的**全部文件**，自动递归展开子目录。
+
+        实测：分享根目录经常只是一个文件夹（`dir=True`, `size=0`），
+        `/get_share_detail` 只返回当前层。子目录靠 `shareurl#/list/share/<fid>`
+        展开——这是 QASx 的 `extract_url` 支持的写法，已对真实实例验证过。
+        """
+        base = shareurl.split("#", 1)[0]
+        collect: list[FileItem] = []
+        queue: list[tuple[str, int]] = [(shareurl, 0)]
+        seen_fids: set[str] = set()
+        expanded = 0
+
+        while queue:
+            url, depth = queue.pop(0)
+            detail = await self.get_share_detail(TaskItem.simple_from_title("probe", url))
+            for item in detail.file_list:
+                if item.dir:
+                    if depth >= max_depth or expanded >= max_dirs or item.fid in seen_fids:
+                        continue
+                    seen_fids.add(item.fid)
+                    expanded += 1
+                    queue.append((f"{base}#/list/share/{item.fid}", depth + 1))
+                else:
+                    collect.append(item)
+        return collect
+
     async def get_data(self) -> AutosaveData:
         response = await self._request_with_retry("GET", "/data")
         return AutosaveData(**self._check_response(response))
 
+    async def get_data_raw(self) -> dict[str, Any]:
+        """拿配置的**原始 dict**（不过 pydantic）。
+
+        写回配置必须走这条：QASx 自己会往任务里塞 calendar_info、source、
+        task_plugins 之类的字段，模型里没有的字段一旦被 model_dump 抹掉，
+        追剧日历绑定、插件配置就跟着废。
+        """
+        response = await self._request_with_retry("GET", "/data")
+        data = self._check_response(response)
+        if not isinstance(data, dict):
+            raise QASException("QAS /data 返回了非预期的响应结构")
+        return data
+
+    @staticmethod
+    def _sanitize(tasklist: list[Any]) -> list[Any]:
+        """把 addition=null 之类会让 /update 崩掉的字段修好（原地改）。"""
+        for task in tasklist:
+            if isinstance(task, dict) and not isinstance(task.get("addition"), dict):
+                task["addition"] = {}
+        return tasklist
+
     async def update(self, data: AutosaveData) -> str:
-        response = await self._request_with_retry("POST", "/update", json=model_dump(data))
+        payload = model_dump(data)
+        self._sanitize(payload.get("tasklist") or [])
+        response = await self._request_with_retry("POST", "/update", json=payload)
+        return self._check_response(response).get("message", "ok")
+
+    async def update_tasklist(self, tasklist: list[dict[str, Any]]) -> str:
+        """只写回 tasklist（原始 dict，其余字段不动）。"""
+        response = await self._request_with_retry(
+            "POST", "/update", json={"tasklist": self._sanitize(tasklist)}
+        )
         return self._check_response(response).get("message", "ok")
 
     @staticmethod
-    def _same_task(left: Any, right: TaskItem) -> bool:
-        return left.taskname == right.taskname and left.shareurl == right.shareurl
+    def _same_task(left: Any, right: TaskItem | dict[str, Any]) -> bool:
+        def _get(obj, key):
+            return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+
+        return (
+            _get(left, "taskname") == _get(right, "taskname")
+            and _get(left, "shareurl") == _get(right, "shareurl")
+        )
 
     async def delete_task(self, task: TaskItem) -> str:
-        """按任务身份（名称 + 分享链接）删除，并回读校验确实删掉了一条。"""
+        """按任务身份（名称 + 分享链接）删除，并回读校验确实少了一条。
+
+        走原始 dict 写回：既避免丢 QASx 维护的字段，也避免 addition=null 触发
+        /update 500（见 _sanitize）。
+        """
         async with _config_lock():
-            data = await self.get_data()
-            matched = [idx for idx, item in enumerate(data.tasklist) if self._same_task(item, task)]
+            raw = await self.get_data_raw()
+            tasklist = raw.get("tasklist") or []
+            if not isinstance(tasklist, list):
+                raise QASException("QAS 配置里的 tasklist 格式异常")
+            matched = [idx for idx, item in enumerate(tasklist) if self._same_task(item, task)]
             if not matched:
                 raise QASException(f"未找到任务: {task.taskname}")
-            task_item = data.tasklist.pop(matched[-1])
-            await self.update(data)
 
-            remaining = await self.get_data()
-            remaining_count = sum(self._same_task(item, task) for item in remaining.tasklist)
-            if remaining_count != len(matched) - 1:
+            target_idx = matched[-1]
+            removed_name = str(tasklist[target_idx].get("taskname") or task.taskname)
+            remaining = [item for idx, item in enumerate(tasklist) if idx != target_idx]
+            await self.update_tasklist(remaining)
+
+            after = (await self.get_data_raw()).get("tasklist") or []
+            left = sum(self._same_task(item, task) for item in after)
+            if left != len(matched) - 1:
                 raise QASException(f"任务删除未生效: {task.taskname}")
-            return task_item.taskname
+            return removed_name
 
     async def list_tasks(self) -> list[TaskItem]:
         data = await self.get_data()
