@@ -266,6 +266,11 @@ How to launch a local QASx: see [`tests/e2e/README.md`](tests/e2e/README.md).
 | Task deletion returns 500 on a real instance | QASx `sync_task_plugins_config()` calls `task["addition"].keys()`; a single `addition=null` in the config makes the whole `/update` fail | Normalise every `addition` to `{}` before writing; `add_task` no longer sends null |
 | Calendar/plugin config lost after deletion | Reading and writing the config through pydantic drops fields QASx maintains (`calendar_info`, `source`, ...) | Read the raw dict, write back only `tasklist` |
 | Subscription always says "no video files in share" | Share roots are usually a single folder; `/get_share_detail` returns only the current level | Recursively expand via `shareurl#/list/share/<fid>` (verified), bounded by depth and folder count |
+| Task created, but QAS saves nothing and only prints "no new files to save" | The task had no `update_subdir`, so QASx refuses to recurse into a share that is "folder inside folder" and concludes there is nothing new | Always set `update_subdir=".*"` on created tasks (same share: 0 files → 2 mkv files actually landed) |
+| Subscription counts "episodes already downloaded" as 0 and re-downloads forever | QASx mirrors the share tree on disk (`/auto/<show>/<subdir>/x.mkv`); reading only the top level sees no files | `list_savepath_files` walks sub-directories |
+| A deleted task reappears in the config seconds later | QASx `/update` spawns background threads (metadata match, calendar init) holding the pre-write task list; they dump the whole config back, restoring the deleted task | After deleting, re-read on a 1.5s→20s back-off and delete again if it came back; up to 15 rounds, error only if it still survives |
+| File deletion succeeds but raises "unknown error" | `/delete_file` does not wrap its response in `{success,data}` — it returns Quark's raw `{status,code}`, and it is asynchronous | Treat `code==0` as success; re-read the folder yourself to confirm |
+| Repeating a save test on the same share prints "no new files" | QASx keeps a transfer-record DB keyed by `file_id + taskname` | Expected (prevents duplicate copies); self-test scripts use a unique task name and folder per run |
 
 ---
 

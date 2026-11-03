@@ -263,6 +263,11 @@ PYTHONPATH=src python3 tests/e2e/e2e_share_expand.py    # 真分享递归展开�
 | 删除任务在真机上报 500 | QASx `sync_task_plugins_config()` 对 `task["addition"].keys()` 取值，配置里只要有任务 `addition=null` 整份 `/update` 就 500 | 写回前把所有 `addition` 统一成 `{}`；`add_task` 也不再发 null |
 | 删任务后追剧日历/插件配置丢了 | 用 pydantic 模型全量读写配置，会抹掉 QASx 自己维护的 `calendar_info`、`source` 等字段 | 删任务改成读**原始 dict**、只写回 `tasklist` |
 | 订阅永远「分享里没有视频文件」 | 分享根目录通常只是一个文件夹，`/get_share_detail` 只返回当前层 | 按 `shareurl#/list/share/<fid>` 递归展开（实测有效），带深度与目录数上限防死循环 |
+| 建了任务但一个文件都没转存，QAS 只打印「没有新的文件需要转存」 | 建任务时没设 `update_subdir`，QASx 遇到「文件夹套文件夹」的分享不递归，直接判定无新文件 | 建任务统一带 `update_subdir=".*"`（实测同一分享从 0 文件变成 2 个 mkv 落地） |
+| 订阅判断「已有几集」永远数成 0，反复重复转存 | QASx 按分享目录结构嵌套落盘（`/自动/某剧/<子目录>/x.mkv`），只读顶层看不到文件 | `list_savepath_files` 递归子目录收集文件 |
+| 删掉的任务过几秒又出现在配置里 | QASx 的 `/update` 会起后台线程（元数据匹配/日历初始化），线程手里攥着写盘前的任务列表，回头整份写盘把删掉的写回去 | 删除后按 1.5s→20s 递增间隔复查，发现复活就再删，最多 15 轮；仍失败才报错 |
+| 删文件成功却抛「未知错误」 | `/delete_file` 不返回 `{success,data}` 包装，直接吐夸克原始响应 `{status,code}`，且是异步任务 | 按 `code==0` 判成功，是否真删干净自己回读目录 |
+| 同一个分享重复测转存时 QAS 说「没有新的文件」 | QASx 有转存记录库，按 `file_id + taskname` 查重 | 这是预期行为（防重复占空间）；自检脚本用唯一任务名+唯一目录 |
 
 ---
 
