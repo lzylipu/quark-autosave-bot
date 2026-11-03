@@ -123,3 +123,69 @@ def test_add_task_does_not_use_server_side_append():
     asyncio.run(run())
     assert len(calls) == 1, f"应只调用一次 update_tasklist，实际 {calls}"
     assert [t["taskname"] for t in calls[0]] == ["别人刚加的", "new"]
+
+
+def test_delete_retries_when_qasx_writes_task_back(monkeypatch):
+    """QASx 进程把内存态整份写回时，删掉的任务会“复活”，必须再删一次。
+
+    实测：正式 QASx 里外部删掉的自检任务一段时间后又出现在配置里。
+    """
+    import asyncio
+
+    from nonebot_plugin_quark_autosave import client as client_mod
+
+    monkeypatch.setattr(client_mod, "DELETE_VERIFY_DELAY", 0)
+
+    class Resurrecting(RawClient):
+        def __init__(self, tasklist, resurrect_times=1):
+            super().__init__(tasklist)
+            self.resurrect_times = resurrect_times
+
+        async def update_tasklist(self, tasklist):
+            res = await super().update_tasklist(tasklist)
+            if self.resurrect_times > 0 and not any(
+                t["taskname"] == "victim" for t in tasklist
+            ):
+                self.resurrect_times -= 1
+                self.tasklist = list(tasklist) + [_task("victim", "u3")]
+            return res
+
+    victim = TaskItem(taskname="victim", shareurl="u3", savepath="/x")
+
+    c = Resurrecting([_task("a", "u1"), _task("victim", "u3")], resurrect_times=1)
+    assert asyncio.run(c.delete_task(victim)) == "victim"
+    assert [t["taskname"] for t in c.tasklist] == ["a"]
+    assert c.resurrect_times == 0
+
+    # 一直复活 → 不能假装成功
+    c2 = Resurrecting([_task("a", "u1"), _task("victim", "u3")], resurrect_times=99)
+    with pytest.raises(QASException):
+        asyncio.run(c2.delete_task(victim))
+
+
+def test_simple_from_title_recurses_into_subdirs():
+    """分享根常是「文件夹套文件夹」，必须带 update_subdir 否则 QASx 一个文件都不转存。"""
+    task = TaskItem.simple_from_title("某剧", "https://pan.quark.cn/s/abc")
+    assert task.update_subdir == ".*"
+    assert task.pattern == "" and task.replace == ""
+    assert TaskItem.template("t", "u").update_subdir == ".*"
+
+
+def test_add_task_payload_carries_update_subdir():
+    import asyncio
+
+    seen = {}
+
+    class Cap(QASClient):
+        async def get_data_raw(self):
+            return {"tasklist": []}
+
+        async def update_tasklist(self, tasklist):
+            seen["tasklist"] = tasklist
+            return "ok"
+
+    async def run():
+        await Cap().add_task(TaskItem.simple_from_title("某剧", "https://pan.quark.cn/s/abc"))
+
+    asyncio.run(run())
+    assert seen["tasklist"][-1]["update_subdir"] == ".*"

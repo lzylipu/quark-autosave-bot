@@ -52,27 +52,32 @@ async def test_task_suggestions_empty_list():
 
 @pytest.mark.asyncio
 async def test_list_savepath_files_returns_entries():
+    seen_paths = []
+
     async def handler(request):
         assert request.url.path == "/get_savepath_detail"
-        assert request.url.params["path"] == "/自动/甄嬛传"
+        path = request.url.params["path"]
+        seen_paths.append(path)
+        if path == "/自动/甄嬛传":
+            items = [
+                {"file_name": "S01E01.mkv", "dir": False, "size": 2000},
+                {"file_name": "海报.jpg", "dir": False, "size": 100},
+                {"file_name": "花絮", "dir": True},
+            ]
+        elif path == "/自动/甄嬛传/花絮":
+            items = [{"file_name": "S01E01花絮.mkv", "dir": False, "size": 300}]
+        else:
+            return httpx.Response(200, json={"success": False, "data": {"error": "获取fid失败"}})
         return httpx.Response(
             200,
-            json={
-                "success": True,
-                "data": {
-                    "list": [
-                        {"file_name": "S01E01.mkv", "dir": False, "size": 2000},
-                        {"file_name": "海报.jpg", "dir": False, "size": 100},
-                        {"file_name": "花絮", "dir": True},
-                    ],
-                    "paths": [],
-                },
-            },
+            json={"success": True, "data": {"list": items, "paths": []}},
         )
 
     client = make_client(handler)
     files = await client.list_savepath_files("/自动/甄嬛传")
-    assert [f["file_name"] for f in files] == ["S01E01.mkv", "海报.jpg", "花絮"]
+    # 递归进子目录，只返回文件（目录不算「已有的一集」）
+    assert [f["file_name"] for f in files] == ["S01E01.mkv", "海报.jpg", "S01E01花絮.mkv"]
+    assert seen_paths == ["/自动/甄嬛传", "/自动/甄嬛传/花絮"]
     await client.client.aclose()
 
 

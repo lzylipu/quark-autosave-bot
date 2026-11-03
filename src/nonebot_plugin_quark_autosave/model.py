@@ -141,6 +141,10 @@ class TaskItem(BaseModel):
     addition: Addition | dict[str, Any] | None = None
     ignore_extension: bool = False
     runweek: RunWeek = Field(default_factory=lambda: [5, 6, 7])
+    # 更新目录：QASx 只有在目录名匹配这个正则时才会递归进去转存。
+    # 分享根目录如果是「文件夹套文件夹」（很常见），不设它就是一个文件都转存不出来，
+    # QASx 只在日志里淡淡写一句「没有新的文件需要转存」。
+    update_subdir: str = ""
     startfid: str | None = None
     detail_info: DetailInfo | None = Field(default=None, exclude=True)
     start_fid_updated_at: int = Field(default=1, exclude=True)
@@ -177,6 +181,7 @@ class TaskItem(BaseModel):
             shareurl=shareurl,
             savepath=f"/{plugin_config.qas_path_base}/{taskname}",
             pattern=MagicRegex.get_pattern_alias(pattern_idx),
+            update_subdir=".*",
         )
 
     @classmethod
@@ -191,6 +196,8 @@ class TaskItem(BaseModel):
             replace="",
             enddate="",
             ignore_extension=False,
+            # 递归所有子目录：分享根常是「文件夹套文件夹」，不设它 QASx 一个文件都不转存
+            update_subdir=".*",
             # 全周有效：建任务后不论星期几都能跑，就算清理失败残留也不会变成“永不执行的僵尸任务”
             runweek=[1, 2, 3, 4, 5, 6, 7],
             startfid="",

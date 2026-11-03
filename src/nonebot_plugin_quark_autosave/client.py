@@ -14,6 +14,9 @@ from .exception import QASException
 # 请求超时配置
 REQUEST_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
 MAX_RETRIES = 2
+# 删除任务后回读复查的间隔（秒）。QASx 进程会把内存态整份写回磁盘，外部删除
+# 可能被这次写回覆盖（任务“复活”），所以隔一会儿要再确认一次。测试里调成 0。
+DELETE_VERIFY_DELAY = 1.5
 # 这些状态码属于瞬态错误，值得重试
 RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
 # 这些异常在重试后仍然失败才算真失败
@@ -166,26 +169,52 @@ class QASClient:
             return []
         return [item for item in data if isinstance(item, dict) and item.get("shareurl")]
 
-    async def list_savepath_files(self, savepath: str) -> list[dict[str, Any]]:
-        """列出网盘某个保存目录里的文件（用于判断本地已有哪几集）。
+    async def list_savepath_files(
+        self, savepath: str, max_depth: int = 4, max_dirs: int = 60
+    ) -> list[dict[str, Any]]:
+        """列出网盘某个保存目录里的**全部文件**（递归进子目录）。
+
+        为什么要递归：QASx 转存嵌套结构的分享时会按分享里的目录层级落盘
+        （`/自动/某剧/<分享里的子目录>/xx.mkv`），只看顶层会把「已经有哪几集」
+        数成 0，订阅就会反复重复转存。
 
         目录还不存在（首次订阅）时 QASx 会报错，这里当作「一集都没有」。
         """
-        try:
-            response = await self._request_with_retry(
-                "GET", "/get_savepath_detail", params={"path": savepath}
-            )
-            data = self._check_response(response)
-        except QASException as exc:
-            logger.info(f"保存目录 {savepath} 读取失败（可能还不存在）: {exc}")
-            return []
-        if not isinstance(data, dict):
-            return []
-        if data.get("error"):
-            logger.info(f"保存目录 {savepath} 不存在: {data['error']}")
-            return []
-        files = data.get("list")
-        return [f for f in files if isinstance(f, dict)] if isinstance(files, list) else []
+        collected: list[dict[str, Any]] = []
+        queue: list[tuple[str, int]] = [(savepath, 0)]
+        seen: set[str] = set()
+        expanded = 0
+
+        while queue:
+            path, depth = queue.pop(0)
+            try:
+                response = await self._request_with_retry(
+                    "GET", "/get_savepath_detail", params={"path": path}
+                )
+                data = self._check_response(response)
+            except QASException as exc:
+                logger.info(f"保存目录 {path} 读取失败（可能还不存在）: {exc}")
+                continue
+            if not isinstance(data, dict) or data.get("error"):
+                if depth == 0:
+                    logger.info(f"保存目录 {path} 不存在: {(data or {}).get('error')}")
+                continue
+            files = data.get("list")
+            if not isinstance(files, list):
+                continue
+            for item in files:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("dir"):
+                    name = str(item.get("file_name") or "")
+                    child = f"{path.rstrip('/')}/{name}"
+                    if depth < max_depth and expanded < max_dirs and child not in seen:
+                        seen.add(child)
+                        expanded += 1
+                        queue.append((child, depth + 1))
+                else:
+                    collected.append(item)
+        return collected
 
     async def get_share_files(
         self, shareurl: str, max_depth: int = 3, max_dirs: int = 40
@@ -283,11 +312,16 @@ class QASClient:
             and _get(left, "shareurl") == _get(right, "shareurl")
         )
 
-    async def delete_task(self, task: TaskItem) -> str:
+    async def delete_task(self, task: TaskItem, *, verify_rounds: int = 3) -> str:
         """按任务身份（名称 + 分享链接）删除，并回读校验确实少了一条。
 
         走原始 dict 写回：既避免丢 QASx 维护的字段，也避免 addition=null 触发
         /update 500（见 _sanitize）。
+
+        verify_rounds：QASx 主进程内存里也有一份 config_data，它跑完一轮任务 /
+        刷新订阅信息时会**整份写回**磁盘。外部删掉的任务如果正好撞上这次写回，
+        就会「复活」。所以删完不是看一次就完，而是隔一会儿再回读，发现复活就
+        再删一次，最多 verify_rounds 轮。
         """
         async with _config_lock():
             raw = await self.get_data_raw()
@@ -302,12 +336,47 @@ class QASClient:
             removed_name = str(tasklist[target_idx].get("taskname") or task.taskname)
             remaining = [item for idx, item in enumerate(tasklist) if idx != target_idx]
             await self.update_tasklist(remaining)
+            # 同名同链接的重复任务可能不止一条：每次只删一条，剩下的保留
+            # （调用方说「删这个任务」就是删一条，不是把重复的全清了）
+            expected_left = len(matched) - 1
 
-            after = (await self.get_data_raw()).get("tasklist") or []
-            left = sum(self._same_task(item, task) for item in after)
-            if left != len(matched) - 1:
-                raise QASException(f"任务删除未生效: {task.taskname}")
+            for round_no in range(1, verify_rounds + 1):
+                await asyncio.sleep(DELETE_VERIFY_DELAY * round_no)
+                after = (await self.get_data_raw()).get("tasklist") or []
+                left = [item for item in after if self._same_task(item, task)]
+                if len(left) <= expected_left:
+                    return removed_name
+                if round_no == verify_rounds:
+                    raise QASException(
+                        f"任务删除未生效（已重试 {verify_rounds} 次，"
+                        f"可能被 QASx 进程写回覆盖）: {task.taskname}"
+                    )
+                logger.warning(
+                    f"任务 {task.taskname} 删除后被 QASx 写回复活，第 {round_no} 次重删"
+                )
+                trimmed, kept = list(after), 0
+                for idx in range(len(trimmed) - 1, -1, -1):
+                    if kept < expected_left and self._same_task(trimmed[idx], task):
+                        kept += 1
+                        continue
+                    if self._same_task(trimmed[idx], task):
+                        trimmed.pop(idx)
+                await self.update_tasklist(trimmed)
             return removed_name
+
+    async def delete_file(self, fid: str, *, delete_records: bool = False, save_path: str = "") -> bool:
+        """删网盘里的一个文件/目录（QASx `/delete_file`，按 fid）。
+
+        bot 正常流程用不到；只有自检/清理临时转存内容时才用。
+        """
+        payload: dict[str, Any] = {"fid": fid}
+        if delete_records and save_path:
+            payload["delete_records"] = True
+            payload["save_path"] = save_path
+        response = await self._request_with_retry("POST", "/delete_file", json=payload)
+        data = self._check_response(response)
+        code = data.get("code") if isinstance(data, dict) else None
+        return code == 0 or data is True or data == {}
 
     async def list_tasks(self) -> list[TaskItem]:
         data = await self.get_data()
