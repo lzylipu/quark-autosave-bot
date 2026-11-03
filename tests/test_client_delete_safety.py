@@ -267,3 +267,18 @@ def test_delete_file_reads_raw_quark_response():
 
     assert asyncio.run(Cap({"status": 200, "code": 0, "data": {"finish": False}}).delete_file("f1"))
     assert not asyncio.run(Cap({"status": 400, "code": 23004, "message": "文件不存在"}).delete_file("f2"))
+
+
+def test_bot_tasks_are_one_shot_skip_calendar():
+    """bot 建的任务必须是一次性任务（skip_calendar），否则 QASx 后台线程会把配置写回。
+
+    上游 app/run.py:3189 用 skip_calendar 跳过日历匹配；不跳过时
+    process_single_task_async 会 Config.write_json(CONFIG_PATH, config_data) 整份写盘，
+    实测把刚删掉的任务写回来。
+    """
+    from nonebot_plugin_quark_autosave.model import TaskItem as T
+
+    assert T.simple_from_title("某剧", "https://pan.quark.cn/s/abc").skip_calendar is True
+    assert T.template("t", "u").skip_calendar is True
+    # 手搓任务默认关，避免影响别的调用
+    assert T(taskname="t", shareurl="u", savepath="/x").skip_calendar is False

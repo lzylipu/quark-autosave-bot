@@ -146,6 +146,11 @@ class TaskItem(BaseModel):
     # QASx 只在日志里淡淡写一句「没有新的文件需要转存」。
     update_subdir: str = ""
     startfid: str | None = None
+    # 一次性任务：让 QASx 跳过日历/TMDB 匹配。
+    # 不设它，QASx 每次 /update 后都会起后台线程做元数据匹配，最后整份写盘
+    # （app/run.py:3189 用这个字段跳过、process_single_task_async 里
+    #  Config.write_json(CONFIG_PATH, config_data)），会把刚删掉的任务写回来。
+    skip_calendar: bool = False
     detail_info: DetailInfo | None = Field(default=None, exclude=True)
     start_fid_updated_at: int = Field(default=1, exclude=True)
 
@@ -182,6 +187,7 @@ class TaskItem(BaseModel):
             savepath=f"/{plugin_config.qas_path_base}/{taskname}",
             pattern=MagicRegex.get_pattern_alias(pattern_idx),
             update_subdir=".*",
+            skip_calendar=True,
         )
 
     @classmethod
@@ -198,6 +204,7 @@ class TaskItem(BaseModel):
             ignore_extension=False,
             # 递归所有子目录：分享根常是「文件夹套文件夹」，不设它 QASx 一个文件都不转存
             update_subdir=".*",
+            skip_calendar=True,
             # 全周有效：建任务后不论星期几都能跑，就算清理失败残留也不会变成“永不执行的僵尸任务”
             runweek=[1, 2, 3, 4, 5, 6, 7],
             startfid="",

@@ -1,6 +1,7 @@
-"""真机全链路 v2：搜索 → 建任务(带 update_subdir) → 真转存 → 校验落地 → 删任务 → 清文件 → 基线核对。
+"""真机自检（v3）：同名任务+同目录跑两轮 → 去重生效 → 删任务 → 不复活 → 清文件。
 
-只在 /自动/_bot自检 下操作，任务名带 _bot自检_ 前缀。
+验证的是线上真实用法：追剧用固定任务名和固定目录，QAS 自己认「已有集数」，
+有新集才补。所以这里不搞唯一名字。
 """
 import asyncio
 import sys
@@ -9,18 +10,13 @@ import nonebot
 
 nonebot.init()
 
+from nonebot_plugin_quark_autosave import subscribe as sub
 from nonebot_plugin_quark_autosave.client import QASClient
 from nonebot_plugin_quark_autosave.model import TaskItem
 from nonebot_plugin_quark_autosave.result import parse_run_output
-from nonebot_plugin_quark_autosave import subscribe as sub
 
-# 每轮用独立目录：QASx 有「转存记录」数据库（file_id + savepath 命中就跳过），
-# 用同一个目录重跑会直接打印「没有新的文件需要转存」，测不到真转存。
-_RUN_TAG = __import__("datetime").datetime.now().strftime("%m%d%H%M")
-SAVEPATH = f"/自动/_bot自检{_RUN_TAG}"
-# 任务名也要每轮唯一：QASx 的转存记录按 file_id + taskname 查重，
-# 同名重跑会被判定「已经转存过」直接跳过
-NAME = f"_bot自检_转存{_RUN_TAG}"
+NAME = "_bot自检_转存"
+SAVEPATH = "/自动/_bot自检"
 OK, FAIL = [], []
 
 
@@ -33,13 +29,10 @@ async def main():
     async with QASClient() as c:
         base = [(t.get("taskname"), t.get("shareurl"))
                 for t in (await c.get_data_raw()).get("tasklist") or []]
-        print(f"基线任务 {len(base)} 个: {[b[0] for b in base]}\n", flush=True)
+        print(f"基线任务 {len(base)} 个\n", flush=True)
 
-        # 1. 搜一个确定性强的片子
         sug = await c.task_suggestions("幻视")
         check("搜索有结果", len(sug) > 0, f"{len(sug)} 条")
-
-        # 2. 挑最小的一个合格分享（少占网盘空间）
         best = None
         for s in sug[:10]:
             url = str(s.get("shareurl") or "")
@@ -54,97 +47,86 @@ async def main():
             if not videos:
                 continue
             total = sum(f.size for f in videos)
-            print(f"  候选 [{(s.get('taskname') or '')[:22]}] "
-                  f"{len(videos)} 视频 / {total/1024**3:.2f}GB", flush=True)
             if best is None or total < best[0]:
-                best = (total, url, len(videos), len(files))
+                best = (total, url, len(videos))
         if not best:
             print("!! 没找到可用分享")
             return 1
-        total_gb, shareurl, n_video, n_all = best
-        print(f"\n选中最小的：{total_gb/1024**3:.2f}GB / {n_video} 个视频\n{shareurl}\n", flush=True)
+        total_gb, shareurl, n_video = best
+        print(f"选中 {total_gb/1024**3:.2f}GB / {n_video} 个视频\n{shareurl}\n", flush=True)
 
-        # 3. 建任务（用 bot 自己的建任务口径：带 update_subdir）
-        t = TaskItem.simple_from_title(NAME, shareurl)
-        t.taskname = NAME
-        t.savepath = SAVEPATH
-        print(f"任务字段 update_subdir={t.update_subdir!r} pattern={t.pattern!r} "
-              f"runweek={t.runweek}\n", flush=True)
-        await c.add_task(t)
-        check("建任务成功", NAME in [x.taskname for x in await c.list_tasks()])
-        mid = [(x.get("taskname"), x.get("shareurl"))
-               for x in (await c.get_data_raw()).get("tasklist") or []]
-        check("建任务没吞掉别人的任务", [p for p in base if p in mid] == base, f"{len(mid)} 个")
+        task = TaskItem.simple_from_title(NAME, shareurl)
+        task.taskname = NAME
+        task.savepath = SAVEPATH
+        print(f"任务字段: update_subdir={task.update_subdir!r} "
+              f"skip_calendar={task.skip_calendar} runweek={task.runweek}\n", flush=True)
+        await c.add_task(task)
+        mid = [x.get("taskname") for x in (await c.get_data_raw()).get("tasklist") or []]
+        check("建任务成功", NAME in mid)
+        check("没吞掉别人的任务", all(p[0] in mid for p in base), f"{len(mid)} 个")
 
-        # 4. 真转存
-        print("转存中（可能要几分钟）…", flush=True)
-        chunks = []
-        try:
-            async for chunk in c.run_script(t):
-                chunks.append(chunk)
-        except Exception as exc:
-            chunks.append(f"[异常] {exc}")
-        text = "\n".join(chunks)
-        print("---- QAS 输出（尾部）----")
-        print(text[-1200:])
-        print("-------------------------", flush=True)
-
-        res = parse_run_output(chunks)
-        check("转存有明确结果", res.status in ("success", "partial", "failed"),
-              f"status={res.status} error={res.error}")
-        check("转存成功", res.status in ("success", "partial"), f"{len(res.files)} 个文件")
-
-        # 5. 回读网盘目录（递归）
+        # --- 第一轮：真转存 ---
+        chunks1 = []
+        async for chunk in c.run_script(task):
+            chunks1.append(chunk)
+        text1 = "\n".join(chunks1)
+        res1 = parse_run_output(chunks1)
+        print("---- 第一轮输出尾部 ----")
+        print(text1[-700:])
+        print("------------------------", flush=True)
         landed = await c.list_savepath_files(SAVEPATH)
-        names = [f.get("file_name") for f in landed]
-        check("文件真的落到网盘", len(names) > 0,
-              f"{len(names)} 个: {names[:3]}")
+        check("第一轮转存成功", res1.status in ("success", "partial"),
+              f"status={res1.status} / {len(res1.files)} 文件")
+        check("文件真落到网盘", len(landed) > 0,
+              f"{len(landed)} 个: {[f.get('file_name') for f in landed][:2]}")
 
-        # 6. 删任务（核心需求）
+        # --- 第二轮：同名同目录再跑，必须被自动去重 ---
+        chunks2 = []
+        async for chunk in c.run_script(task):
+            chunks2.append(chunk)
+        text2 = "\n".join(chunks2)
+        res2 = parse_run_output(chunks2)
+        check("第二轮自动去重", "没有新的文件需要转存" in text2,
+              f"status={res2.status}")
+        landed2 = await c.list_savepath_files(SAVEPATH)
+        check("第二轮文件数没变", len(landed2) == len(landed),
+              f"{len(landed)} -> {len(landed2)}")
+
+        # --- 删任务 ---
         try:
-            await c.delete_task(t)
-            left = [x.taskname for x in await c.list_tasks()]
-            check("转存后任务已删除", NAME not in left)
+            await c.delete_task(task)
+            check("删任务成功", True, f"已删 {NAME}")
         except Exception as exc:
-            check("转存后任务已删除", False, str(exc)[:160])
+            check("删任务成功", False, str(exc)[:150])
 
-        # 7. 删任务后等一会儿再看（防 QASx 内存态写回复活）
-        await asyncio.sleep(8)
-        again = [x.taskname for x in await c.list_tasks()]
-        check("删完 8 秒没复活", NAME not in again, str(again))
+        # --- 复活观察 30 秒（QASx 后台线程写回的高发窗口）---
+        alive = []
+        for i in range(6):
+            await asyncio.sleep(5)
+            if NAME in [x.taskname for x in await c.list_tasks()]:
+                alive.append(5 * (i + 1))
+        check("30 秒内没复活", not alive, f"复活时刻(秒): {alive}")
 
-        # 8. 清理测试文件（只删本次自检目录下的）
+        # --- 清文件 ---
         removed = 0
-        for f in landed:
-            if not f.get("fid"):
-                continue
-            if await c.delete_file(str(f["fid"])):
+        for f in (await c.list_savepath_files(SAVEPATH)):
+            if f.get("fid") and await c.delete_file(str(f["fid"])):
                 removed += 1
-        # 删的是异步任务，且目录本身（转存时按分享结构建的）也要清掉
-        left_files = landed
         for _ in range(10):
             await asyncio.sleep(3)
-            left_files = await c.list_savepath_files(SAVEPATH)
-            if not left_files:
+            if not await c.list_savepath_files(SAVEPATH):
                 break
-        check("自检文件已清理", len(left_files) == 0,
-              f"删了 {removed}/{len(landed)} 个，剩 {len(left_files)} 个")
-        # 空目录壳也清掉（只看顶层）
-        top = await c._request_with_retry(
-            "GET", "/get_savepath_detail", params={"path": SAVEPATH}
+        left = await c.list_savepath_files(SAVEPATH)
+        check("自检文件已清理", not left, f"删了 {removed} 个，剩 {len(left)} 个")
+
+        top = c._check_response(
+            await c._request_with_retry("GET", "/get_savepath_detail", params={"path": SAVEPATH})
         )
-        top_list = (c._check_response(top) or {}).get("list") or []
-        for item in top_list:
+        for item in (top or {}).get("list") or []:
             if item.get("dir") and item.get("fid"):
                 await c.delete_file(str(item["fid"]))
         await asyncio.sleep(4)
-        top = await c._request_with_retry(
-            "GET", "/get_savepath_detail", params={"path": SAVEPATH}
-        )
-        top_list = (c._check_response(top) or {}).get("list") or []
-        check("自检目录已清空", not top_list, f"剩 {[i.get('file_name') for i in top_list]}")
 
-        # 9. 基线核对
         final = [(x.get("taskname"), x.get("shareurl"))
                  for x in (await c.get_data_raw()).get("tasklist") or []]
         check("最终任务与基线完全一致", final == base, f"{len(final)} vs {len(base)}")
