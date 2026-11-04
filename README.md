@@ -145,14 +145,15 @@ DL 甄嬛传        → 取消订阅
 > 不挂卷的话 `docker rm` / 升级镜像重建容器时**全部丢失**，只能重新 `AD 片名`。
 > 启动日志里如果看到「`/app/data` 没有挂载卷」，就是这个原因。
 >
-> 绑定宿主机目录时**属主必须是 1000:1000**（容器内跑的是 `appuser`），否则文件建不出来，
-> 启动会报 `Permission denied`：
+> 绑定宿主机目录**不用管权限**：镜像启动时会自己把 `/app/data` 的属主改成运行用户
+> （uid 1000）再降权运行，目录属主是 root 也照跑。
 >
 > ```bash
 > mkdir -p /volume1/docker/quarkbot/data
-> chown -R 1000:1000 /volume1/docker/quarkbot/data
 > # compose 里写  - /volume1/docker/quarkbot/data:/app/data
 > ```
+>
+> 只有 NFS/SMB/cifs 这类改不了属主的挂载点才会退回以 root 运行，功能不受影响。
 
 ```bash
 docker run -d \
@@ -313,6 +314,12 @@ PYTHONPATH=src python3 tests/e2e/e2e_share_expand.py    # 真分享递归展开�
 ---
 
 ## 📝 更新日志
+
+### v0.4.6
+
+- 🔧 **不用再手动 `chown`**：镜像改为 root 启动，`start.sh` 自己把 `/app/data` 交给运行用户（uid 1000）再降权运行，宿主机目录属主是 root 也直接能写
+- 🧯 NFS/SMB/cifs 这类改不了属主的挂载点自动退回 root 运行，功能不受影响，日志里会说明
+- 📄 README 去掉 `chown -R 1000:1000` 的手动步骤
 
 ### v0.4.5
 

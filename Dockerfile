@@ -35,7 +35,8 @@ RUN mkdir -p /app/data && chmod +x /app/start.sh && \
     useradd --create-home --shell /usr/sbin/nologin appuser && \
     chown -R appuser:appuser /app
 
-USER appuser
+# 以 root 启动，由 start.sh 把 /app/data 的属主改成 appuser 后再降权运行。
+# 这样用户 bind mount 宿主机目录时不用自己 chown（NFS/SMB 改不了属主时退回 root 运行）。
 
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
     CMD python -c "import os, socket, sys; s = socket.socket(); s.settimeout(5); sys.exit(0 if s.connect_ex(('127.0.0.1', int(os.environ.get('PORT', '8080')))) == 0 else 1)"

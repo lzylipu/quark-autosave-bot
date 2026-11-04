@@ -48,4 +48,27 @@ else
   echo "============================================================"
 fi
 
+# ---- 数据目录权限：容器自己修，不需要用户 chown ----
+# 镜像以 root 启动，这里把挂进来的数据目录交给 appuser(1000)，再降权运行。
+# 这样 bind mount 的宿主目录不管是 root 还是别的属主，都直接能用；
+# 极少数改不了属主的挂载点（NFS/SMB/cifs）就退回以 root 运行，功能不受影响。
+DATA_DIR="$(dirname "${SUB_STORE_FILE:-/app/data/subscriptions.json}")"
+DROP_TO_APPUSER=0
+if [ "$(id -u)" = "0" ]; then
+  mkdir -p "$DATA_DIR" 2>/dev/null || true
+  chown -R 1000:1000 "$DATA_DIR" 2>/dev/null || true
+  chmod u+rwx "$DATA_DIR" 2>/dev/null || true
+  if su appuser -s /bin/sh -c "test -w '$DATA_DIR'" 2>/dev/null; then
+    DROP_TO_APPUSER=1
+  else
+    echo "[quarkbot] 提示：$DATA_DIR 改不了属主（NFS/SMB 之类的挂载），本次以 root 运行，功能不受影响"
+  fi
+fi
+
+if [ "$DROP_TO_APPUSER" = "1" ]; then
+  if command -v setpriv >/dev/null 2>&1; then
+    exec setpriv --reuid=1000 --regid=1000 --init-groups python /app/bot.py
+  fi
+  exec su -s /bin/sh appuser -c "exec python /app/bot.py"
+fi
 exec python /app/bot.py

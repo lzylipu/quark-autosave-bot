@@ -119,15 +119,17 @@ User sends a Quark link ──→ Extract URL (keeps ?pwd= and #/ subfolder)
 > upgrading the image wipes them and you have to re-send `AD <title>` for every show.
 > If the startup log says "/app/data is not a mounted volume", that is exactly this.
 >
-> For a bind mount the host directory **must be owned by 1000:1000** (the container
-> runs as `appuser`), otherwise the file cannot be created and startup reports
-> `Permission denied`:
+> **No permission fiddling needed** for a bind mount: on startup the container hands
+> `/app/data` to its runtime user (uid 1000) and then drops privileges, so a
+> root-owned host directory works as-is.
 >
 > ```bash
 > mkdir -p /volume1/docker/quarkbot/data
-> chown -R 1000:1000 /volume1/docker/quarkbot/data
 > # compose:  - /volume1/docker/quarkbot/data:/app/data
 > ```
+>
+> Only filesystems that refuse ownership changes (NFS/SMB/cifs) fall back to running
+> as root; everything still works.
 
 ```bash
 docker run -d \
@@ -318,6 +320,12 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 ---
 
 ## 📝 Changelog
+
+### v0.4.6
+
+- 🔧 **No manual `chown` anymore**: the image now starts as root and `start.sh` hands `/app/data` to the runtime user (uid 1000) before dropping privileges, so a root-owned host directory just works
+- 🧯 On filesystems that refuse ownership changes (NFS/SMB/cifs) it falls back to running as root; behavior is unchanged and the log says so
+- 📄 README no longer asks you to run `chown -R 1000:1000`
 
 ### v0.4.5
 

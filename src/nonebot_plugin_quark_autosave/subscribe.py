@@ -496,9 +496,10 @@ def seconds_until(hhmm: str, now: datetime | None = None) -> float:
 def _save_failed_msg(path: str | Path) -> str:
     return (
         f"❌ 订阅没存下来（{path} 写不进去）\n"
-        "　　容器内进程是 appuser（uid 1000），宿主机上的目录属主不是它就会 Permission denied。\n"
-        "　　修法（宿主机执行）：chown -R 1000:1000 <你挂的那个目录>\n"
-        "　　如果压根没挂卷：docker run 加 -v quarkbot-data:/app/data"
+        "　　容器启动时会自动把数据目录交给运行用户（uid 1000），正常不该出现这句。\n"
+        "　　还报这个说明挂载点不让改属主、或者是只读挂载（常见于 NFS/SMB/cifs 共享）。\n"
+        "　　换成 Docker 命名卷就好：docker run 加 -v quarkbot-data:/app/data\n"
+        "　　（compose 写 volumes: - bot-data:/app/data），不用管权限。"
     )
 
 
