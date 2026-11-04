@@ -292,10 +292,13 @@ async def handle_sub_command(event: Event):
     cmd, arg = match.group(1).upper(), match.group(2).strip()
 
     if cmd == "AD":
-        # 记住会话，定时任务的报告发回这里
+        # 记住会话，定时任务的报告发回这里（写不进去不影响下面存订阅，但要提示）
+        chat_saved = True
         if chat_id := _chat_id_of(event):
-            store.set_chat_id(chat_id)
+            chat_saved = store.set_chat_id(chat_id)
         _, msg = store.add(arg)
+        if not chat_saved:
+            msg += "\n⚠️ 会话绑定没存下来，定时报告可能发不出去（检查 /app/data 是否可写）"
         await sub_handler.finish(msg)
 
     if cmd == "DL":

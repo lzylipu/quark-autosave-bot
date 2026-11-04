@@ -156,20 +156,23 @@ class SubscriptionStore:
     def list_all(self) -> list[str]:
         return [k for k in self.load() if not k.startswith("__")]
 
-    def record_result(self, name: str, result: str) -> None:
+    def record_result(self, name: str, result: str) -> bool:
         data = self.load()
-        if name in data:
-            data[name]["last_result"] = f"{_now_str()} {result}"
-            self.save(data)
+        if name not in data:
+            return False
+        data[name]["last_result"] = f"{_now_str()} {result}"
+        return self._save_or_explain(data)
 
     def get_chat_id(self) -> str | None:
         return self.load().get("__chat_id__", {}).get("id")
 
-    def set_chat_id(self, chat_id: str) -> None:
+    def set_chat_id(self, chat_id: str) -> bool:
+        """记住报告发往哪个会话；写不进去返回 False（不抛异常，别把 AD 命令搞崩）。"""
         data = self.load()
-        if data.get("__chat_id__", {}).get("id") != chat_id:
-            data["__chat_id__"] = {"id": chat_id}
-            self.save(data)
+        if data.get("__chat_id__", {}).get("id") == chat_id:
+            return True
+        data["__chat_id__"] = {"id": chat_id}
+        return self._save_or_explain(data)
 
 
 # ---------------------------------------------------------------------------

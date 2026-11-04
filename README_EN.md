@@ -309,6 +309,11 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 
 ## 📝 Changelog
 
+### v0.4.4
+
+- 🩹 When the chat binding cannot be written (`/app/data` read-only) the `AD` command no longer crashes; it reports "chat binding not saved" and still stores the subscription
+- 🧪 1 new unit test (write failure returns False instead of raising), 115 passed
+
 ### v0.4.3
 
 - 💾 **Subscriptions survive upgrades and restarts**: the `docker run` sample had no `-v`, so recreating the container wiped `/app/data/subscriptions.json`. It now ships with `-v quarkbot-data:/app/data` plus a red-box warning that the volume is mandatory

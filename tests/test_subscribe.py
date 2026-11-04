@@ -243,6 +243,17 @@ class TestSubscriptionStore:
         store.path.write_text('{"甄嬛传": {"created', encoding="utf-8")
         assert SubscriptionStore(store.path).list_all() == ["甄嬛传"]
 
+    def test_set_chat_id_returns_false_when_unwritable(self, tmp_path, monkeypatch):
+        """目录不能写时不能抛异常把 AD 命令搞崩，只返回 False 让上层提示。"""
+        store = SubscriptionStore(tmp_path / "subs.json")
+
+        def boom(data):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(store, "save", boom)
+        assert store.set_chat_id("12345") is False
+        assert store.record_result("甄嬛传", "x") is False
+
     def test_save_is_atomic_no_tmp_left(self, tmp_path):
         store = SubscriptionStore(tmp_path / "subs.json")
         store.add("甄嬛传")

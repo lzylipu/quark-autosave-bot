@@ -305,6 +305,11 @@ PYTHONPATH=src python3 tests/e2e/e2e_share_expand.py    # 真分享递归展开�
 
 ## 📝 更新日志
 
+### v0.4.4
+
+- 🩹 会话绑定写不进去（`/app/data` 只读）时不再把 `AD` 命令搞崩：一句提示「会话绑定没存下来」，订阅照存
+- 🧪 新增 1 个单测（写失败返回 False 不抛异常），共 115 passed
+
 ### v0.4.3
 
 - 💾 **订阅不会因为升级/重启丢了**：README 里的 `docker run` 示例原来没有 `-v`，容器一重建 `/app/data/subscriptions.json` 就跟着消失。现在示例带 `-v quarkbot-data:/app/data`，并加了一节红字提醒「必须挂卷」
