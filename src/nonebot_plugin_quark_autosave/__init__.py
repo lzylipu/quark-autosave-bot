@@ -27,9 +27,11 @@ from .subscribe import (
     assess_share,
     episode_keys,
     fmt_episode_keys,
+    has_explicit_season,
     parse_season,
     pick_best,
     rename_rules,
+    season_rename_rules,
     seconds_until,
     split_season,
     video_names_from_dir,
@@ -305,9 +307,22 @@ async def handle_sub_command(event: Event):
     await sub_handler.finish("\n".join(lines))
 
 
+def _only_season(cand: Candidate, season: int, enabled: bool) -> Candidate:
+    """订阅写死了季时，把候选的「待补集」砍到只剩这一季。
+
+    assess_share 按文件名里的季建 (季, 集)；「黑镜 S05」搜到第七季的分享时，
+    S07E01~E06 会全被算成待补 → 结果下错季（真机复现）。这里只保留目标季。
+    """
+    if enabled:
+        cand.new_episodes = {key for key in cand.new_episodes if key[0] == season}
+    return cand
+
+
 async def _run_one_subscription(client: QASClient, name: str) -> str:
     """跑一个订阅：扫本地 → 搜索 → 筛大小 → 选能补最多的 → 转存 → 删任务。"""
     title, season = split_season(name)
+    # 订阅名写死了季（「黑镜 S05」）就只下这一季，否则会把别的季当成本季缺集
+    only_season = has_explicit_season(name)
     savepath = f"/{plugin_config.simple_save_root}/{sanitize_title(title)}"
 
     # 1. 本地已有哪几集
@@ -338,13 +353,17 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
             logger.info(f"订阅[{name}] 跳过分享 {shareurl}: {exc}")
             continue
         candidates.append(
-            assess_share(
-                shareurl,
-                files,
-                local_keys,
-                plugin_config.sub_min_size_gb,
-                plugin_config.sub_max_size_gb,
+            _only_season(
+                assess_share(
+                    shareurl,
+                    files,
+                    local_keys,
+                    plugin_config.sub_min_size_gb,
+                    plugin_config.sub_max_size_gb,
+                    season,
+                ),
                 season,
+                only_season,
             )
         )
 
@@ -366,13 +385,16 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
     # 文件名里已经带季数（合集常见：…S03.EP07…）就沿用文件里的季，
     # 否则统一按订阅名的季补前缀
     keep_season = any(parse_season(n) for n in best.video_files)
-    task.pattern, task.replace = rename_rules(season, keep_season_in_name=keep_season)
+    if only_season and keep_season:
+        # 写死了季 + 文件名带季：pattern 同时当筛选用，只转存这一季
+        task.pattern, task.replace = season_rename_rules(season)
+    else:
+        task.pattern, task.replace = rename_rules(season, keep_season_in_name=keep_season)
     # 交给 QASx 任务默认配置；注意别写成 None —— null 会让 QASx 的 /update 直接 500
     task.addition = {}
 
     new_desc = f"新增 {fmt_episode_keys(best.new_episodes)}（{len(best.new_episodes)} 集）"
     logger.info(f"订阅[{name}] 选中 {best.shareurl} {new_desc}")
-
     try:
         await client.add_task(task)
     except QASException as exc:
@@ -424,7 +446,12 @@ async def _run_all_subscriptions() -> None:
             except Exception as exc:
                 logger.exception(f"订阅[{name}] 执行异常: {exc}")
                 report = f"💥 执行异常: {exc}"
-            store.record_result(name, report.splitlines()[0])
+            # 结果先落日志：写订阅文件/发 TG 任一失败都不该让整轮报「执行失败」
+            logger.info(f"订阅[{name}] 结果:\n{report}")
+            try:
+                store.record_result(name, report.splitlines()[0])
+            except Exception as exc:
+                logger.error(f"订阅[{name}] 结果写入失败（不影响本轮转存）: {exc}")
             await _report(f"📺「{name}」\n{report}")
 
 

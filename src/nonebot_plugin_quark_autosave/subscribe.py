@@ -52,6 +52,12 @@ SEASON_TV_PATTERN = (
 _CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
            "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
+# 订阅名结尾的季数：S05 / 第二季 / Season 2。split_season 与 has_explicit_season 共用。
+_SEASON_SUFFIX_RE = re.compile(
+    r"[\s\.\-_]*(?:[Ss](\d{1,2})|第\s*([0-9一二三四五六七八九十]+)\s*季|[Ss]eason\s*(\d{1,2}))\s*$",
+    re.IGNORECASE,
+)
+
 
 def _now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -138,15 +144,21 @@ def split_season(taskname: str) -> tuple[str, int]:
     「琅琊榜 第二季」→ ("琅琊榜", 2)。搜索和建任务都用片名，季数只影响命名。
     """
     name = taskname.strip()
-    match = re.search(r"[\s\.\-_]*[Ss](\d{1,2})\s*$", name)
+    match = _SEASON_SUFFIX_RE.search(name)
     if match:
-        return name[: match.start()].strip() or name, int(match.group(1))
-    match = re.search(r"[\s\.\-_]*(?:第\s*([0-9一二三四五六七八九十]+)\s*季|Season\s*(\d+))\s*$", name, re.IGNORECASE)
-    if match:
-        raw = match.group(1) or match.group(2)
+        raw = match.group(1) or match.group(2) or match.group(3)
         season = int(raw) if raw.isdigit() else _CN_NUM.get(raw, 1)
         return name[: match.start()].strip() or name, season
     return name, 1
+
+
+def has_explicit_season(taskname: str) -> bool:
+    """订阅名里有没有明确写季数（「黑镜 S05」「琅琊榜 第二季」）。
+
+    写了的订阅只下这一季：否则「黑镜 S05」会搜到并选中第七季的分享，
+    把 S07E01~E06 当成「S05 缺的集」全转存进来（真机复现过）。
+    """
+    return bool(_SEASON_SUFFIX_RE.search(taskname.strip()))
 
 
 def rename_rules(season: int, keep_season_in_name: bool = False) -> tuple[str, str]:
@@ -160,6 +172,19 @@ def rename_rules(season: int, keep_season_in_name: bool = False) -> tuple[str, s
     if keep_season_in_name:
         return SEASON_TV_PATTERN, r"S\1E\2.\3"
     return TV_PATTERN, f"S{season:02d}E\\2.\\3"
+
+
+def season_rename_rules(season: int) -> tuple[str, str]:
+    """只认某一季的重命名规则（S05E01）。
+
+    订阅名写死了季（「黑镜 S05」）时用它当任务 pattern：QASx 的 pattern
+    同时是筛选条件，匹配不到的文件不转存。这样「黑镜七季全」这种合集分享
+    只会转存第 5 季，不会把别的季一起下进来。
+    """
+    return (
+        rf".*?[Ss]0?{season}(?!\d)\s*[\.\-_ ]*\s*(?:[Ee][Pp]?)?\s*(\d{{1,3}})(?![\dA-Za-z]).*?\.(mp4|mkv)",
+        rf"S{season:02d}E\1.\2",
+    )
 
 
 # ---------------------------------------------------------------------------

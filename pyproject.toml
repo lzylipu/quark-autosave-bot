@@ -1,6 +1,6 @@
 [project]
 name = "quark-autosave-bot"
-version = "0.3.0"
+version = "0.3.1"
 description = "Minimal Telegram bot for Quark cloud auto-save via QAS"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -51,7 +51,7 @@ nonebug = { git = "https://github.com/nonebot/nonebug" }
 [tool.bumpversion]
 tag = true
 commit = true
-current_version = "0.3.0"
+current_version = "0.3.1"
 message = "release: bump vesion from {current_version} to {new_version}"
 
 
@@ -100,7 +100,12 @@ addopts = [
   "--tb=short",            # 简短的错误回溯
   "--strict-markers",      # 严格标记模式
   "--import-mode=prepend", # 导入模式
+  # tests/e2e 是连真实 QAS / 真实 Telegram 的验收脚本（模块级 asyncio.run），
+  # 不是 pytest 用例，被收集会在无网络/无 cookie 的 CI 里直接中断整个 session。
+  "--ignore=tests/e2e",
 ]
+testpaths = ["tests"]
+norecursedirs = ["e2e", ".git", "__pycache__", "data"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"

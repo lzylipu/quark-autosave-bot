@@ -301,6 +301,14 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 
 ## 📝 Changelog
 
+### v0.3.1
+
+- 🎯 A subscription with an explicit season only saves that season: `AD 黑镜 S05` used to pick a season-7 share and save `S07E01~E06` as "missing episodes of season 5" (reproduced on a real instance)
+- 🏷️ For season-locked subscriptions the task `pattern` also filters files, so other seasons in a multi-season share are not saved
+- 💬 Subscription results are logged before the store write: an unwritable subscriptions file no longer fails the whole run, and the report is still delivered
+- 🧪 `tests/e2e` excluded from pytest collection (those scripts hit a real QAS and aborted the whole CI session), CI is green again
+- ✅ 3 new unit tests for the two bugs; verified on a real instance with 《甄嬛传》 (76 episodes) and 《黑镜 S05》 (3 episodes)
+
 ### v0.3.0
 
 - 📺 Series subscriptions: `AD <title>` / `DL <title>` / `LIST`, daily auto-search and gap filling
