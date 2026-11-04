@@ -190,7 +190,7 @@ scan save folder ──→ episodes you already have (E05 / S01E05 / 第5集 all
 | `SUB_MIN_SIZE_GB` | | `1.5` | Minimum size per episode in GB |
 | `SUB_MAX_SIZE_GB` | | `8.0` | Maximum size per episode in GB |
 | `SUB_MAX_CANDIDATES` | | `0` | Max search results checked per subscription; `0` = scan all (good copies often rank dozens deep) |
-| `SUB_MAX_OK_CANDIDATES` | | `5` | Stop scanning once this many in-range shares were found (`0` = never stop early) |
+| `SUB_MAX_OK_CANDIDATES` | | `0` | Stop scanning once this many in-range shares were found; `0` = scan everything then pick (default, the fullest copy often ranks lower) |
 | `SUB_FALLBACK_MIN_SIZE_GB` | | `0.5` | Fallback floor: when nothing is in range, accept shares whose median episode is at least this size |
 | `SUB_STORE_FILE` | | `/app/data/subscriptions.json` | Subscription list path (`bot-data` volume in compose) |
 | `ASK_PASSCODE` | | `true` | Ask for the passcode in chat when a share requires one |
@@ -303,10 +303,16 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 
 ## 📝 Changelog
 
+### v0.4.1
+
+- 🔎 Scans every search result before choosing: `SUB_MAX_OK_CANDIDATES` now defaults to `0`. It used to stop after 5 in-range shares and download the first one, while search rankings put the fullest copies further down — 走马上任 had 6 in-range shares (9/9/7/2/7/5 eps) out of 71 results
+- ⚡ Detail probing is now 4-way concurrent: 尚公主's 169 results dropped from 90s to 16s, so a full scan is no longer slow
+- 📊 The "checked N shares" figure now counts only shares actually probed
+
 ### v0.4.0
 
 - 🔍 Subscriptions no longer stop at the first 10 shares: `SUB_MAX_CANDIDATES` now defaults to `0` (scan everything). For 《走马上任》 the first 10 of 71 results had no 1.5~8G copy; the qualifying share was #25
-- ⏹️ Stop scanning once `SUB_MAX_OK_CANDIDATES` (default 5) in-range shares are found
+- ⏹️ Scans all results and picks the share with the most episodes instead of taking the first in-range one; detail probing runs 4-way concurrent, cutting a 170-result search from two minutes to seconds
 - 🎯 Title must match: search results contain other shows from the same slot (《尚公主》 once picked a 7.85G 《黄金时段/Primetime》); matching now uses both the result title and the file names
 - ⚖️ Smaller episodes can still download: when nothing is in range, fall back to shares whose median episode is at least `SUB_FALLBACK_MIN_SIZE_GB` (default 0.5G), and say so in the report; 0.3G cam-rips are still rejected
 - 📊 Failure reports now state how many shares were checked, how many were dead links / had no videos, and the measured median size range

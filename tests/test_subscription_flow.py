@@ -247,6 +247,29 @@ async def test_flow_explicit_season_reports_no_season_match():
     assert "最新" in report or "没有新集" in report
 
 
+async def test_flow_scans_every_share_before_picking():
+    """默认要扫完全部结果再挑「集数最全」的那个，不能拿到第一个合格的就下。
+
+    真机：走马上任 71 条里合格的有 6 个（9 集 / 9 集 / 7 集 / 2 集 / 7 集 / 5 集），
+    提前停在第一个就会拿着不最全的那份下。
+    """
+    from nonebot_plugin_quark_autosave import subscribe as sub_mod
+
+    small = [_file(f"走马上任.E{i}.mkv", 2.5) for i in range(1, 4)]
+    mid = [_file(f"走马上任.E{i}.mkv", 2.5) for i in range(1, 6)]
+    big = [_file(f"走马上任.E{i}.mkv", 2.5) for i in range(1, 10)]
+    client = FakeClient(
+        [],
+        [{"shareurl": "s"}, {"shareurl": "m"}, {"shareurl": "b"}],
+        {"s": _detail(*small), "m": _detail(*mid), "b": _detail(*big)},
+    )
+
+    assert sub_mod.plugin_config.sub_max_ok_candidates == 0  # 默认不提前停
+    await plugin._run_one_subscription(client, "走马上任")
+
+    assert client.added[0].shareurl == "b"
+
+
 async def test_flow_counts_only_episodes_the_pattern_will_transfer():
     """合集里混排「S02E04」和「E01」时，只能把真会转存的那几集算成新增。
 
