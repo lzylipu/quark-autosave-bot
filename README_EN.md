@@ -190,7 +190,7 @@ scan save folder ──→ episodes you already have (E05 / S01E05 / 第5集 all
 | `SUB_MIN_SIZE_GB` | | `1.5` | Minimum size per episode in GB |
 | `SUB_MAX_SIZE_GB` | | `8.0` | Maximum size per episode in GB |
 | `SUB_MAX_CANDIDATES` | | `0` | Max search results checked per subscription; `0` = scan all (good copies often rank dozens deep) |
-| `SUB_MAX_OK_CANDIDATES` | | `0` | Stop scanning once this many in-range shares were found; `0` = scan everything then pick (default, the fullest copy often ranks lower) |
+| `SUB_MAX_OK_CANDIDATES` | | `1` | Stop scanning once this many usable shares were found (default 1 = take the first match instead of paging through everything); `0` = scan all results, then pick the fullest |
 | `SUB_FALLBACK_MIN_SIZE_GB` | | `0.5` | Fallback floor: when nothing is in range, accept shares whose median episode is at least this size |
 | `SUB_STORE_FILE` | | `/app/data/subscriptions.json` | Subscription list path (`bot-data` volume in compose) |
 | `ASK_PASSCODE` | | `true` | Ask for the passcode in chat when a share requires one |
@@ -303,11 +303,17 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 
 ## 📝 Changelog
 
+### v0.4.2
+
+- ⏹️ Stops at the first usable share instead of scanning the whole result list: `SUB_MAX_OK_CANDIDATES` defaults to `1`. Usable = title matches + every episode within the size window + it really has episodes you are missing; a share with no new episodes or wrong sizes keeps scanning. v0.4.1 scanned all 170+ results before choosing, which was pure wasted time
+- ⚡ Probes 4 shares per batch: shows that match early finish in a second or two, and when a batch has several usable shares the one with the most episodes wins
+- 📊 Logs "found N usable shares after probing X, stop scanning" so you can see where it stopped
+
 ### v0.4.1
 
-- 🔎 Scans every search result before choosing: `SUB_MAX_OK_CANDIDATES` now defaults to `0`. It used to stop after 5 in-range shares and download the first one, while search rankings put the fullest copies further down — 走马上任 had 6 in-range shares (9/9/7/2/7/5 eps) out of 71 results
-- ⚡ Detail probing is now 4-way concurrent: 尚公主's 169 results dropped from 90s to 16s, so a full scan is no longer slow
-- 📊 The "checked N shares" figure now counts only shares actually probed
+- 🔎 Briefly switched to scanning every result before choosing (`SUB_MAX_OK_CANDIDATES=0`); v0.4.2 goes back to "stop at the first usable one" because full scans just waste time
+- ⚡ Share probing is concurrent: 169 results for one show dropped from 90s to a dozen seconds
+- 📊 "checked N shares" in the report now counts the probes that actually succeeded
 
 ### v0.4.0
 

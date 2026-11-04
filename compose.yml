@@ -26,7 +26,7 @@ services:
       # 每个订阅最多检查多少个搜索结果（0 = 搜到多少看多少）
       SUB_MAX_CANDIDATES: "${SUB_MAX_CANDIDATES:-0}"
       # 凑够这么多个合格分享就停止继续扫（0 = 不提前停）
-      SUB_MAX_OK_CANDIDATES: "${SUB_MAX_OK_CANDIDATES:-0}"
+      SUB_MAX_OK_CANDIDATES: "${SUB_MAX_OK_CANDIDATES:-1}"
       # 全都不在区间内时退一档的下限（每集中位数 GB，挡枪版）
       SUB_FALLBACK_MIN_SIZE_GB: "${SUB_FALLBACK_MIN_SIZE_GB:-0.5}"
     volumes:

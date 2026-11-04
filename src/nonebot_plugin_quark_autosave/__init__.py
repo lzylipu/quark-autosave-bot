@@ -346,24 +346,26 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
     # 3. 逐个探分享：大小合格 + 能补几集
     # sub_max_candidates=0（默认）表示搜到多少看多少：盘搜按热度排序，合格资源常在
     # 几十条之后（走马上任第 25 条才有 1.5~8G 的），原来只看前 10 条会漏掉全部。
+    # 分批探：一批 _PROBE_CONCURRENCY 个，凑够合格的就停，剩下的不再探。
+    # 合格 = 片名对得上 + 每集大小在区间内 + 确实有本地缺的集。集数不够/大小不对
+    # 都算不合格，继续往后看；同一批里挑集数最多的（已经花掉的请求不能浪费）。
     limit = plugin_config.sub_max_candidates
     max_ok = plugin_config.sub_max_ok_candidates
     pending = results if limit <= 0 else results[:limit]
     checked = failed = empty = 0
-    sem = asyncio.Semaphore(_PROBE_CONCURRENCY)
+    candidates: list[Candidate] = []
 
     async def _probe(idx: int, item: dict) -> tuple[int, Candidate | None, str]:
         """探一个分享。返回 (序号, 候选, 失败原因)；失败原因空表示成功。"""
         shareurl = str(item.get("shareurl", "")).strip()
         if not shareurl:
             return idx, None, ""
-        async with sem:
-            try:
-                files = await client.get_share_files(shareurl)
-            except QASException as exc:
-                # 链接失效是常态，换下一个
-                logger.info(f"订阅[{name}] 跳过分享 {shareurl}: {exc}")
-                return idx, None, str(exc)
+        try:
+            files = await client.get_share_files(shareurl)
+        except QASException as exc:
+            # 链接失效是常态，换下一个
+            logger.info(f"订阅[{name}] 跳过分享 {shareurl}: {exc}")
+            return idx, None, str(exc)
         cand = _only_season(
             assess_share(
                 shareurl,
@@ -380,24 +382,30 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
         )
         return idx, cand, ""
 
-    # 并发探详情：一条一条串行的话，热门剧 170 多条要跑好几分钟。
-    # 结果按原始搜索顺序排序，同分时仍然取先搜到的（盘搜按时间倒序）。
-    probed = await asyncio.gather(
-        *(_probe(i, item) for i, item in enumerate(pending))
-    )
-    candidates: list[Candidate] = []
-    for idx, cand, err in sorted(probed, key=lambda x: x[0]):
-        if err or cand is None:
-            if err:
-                failed += 1
-            continue
-        checked += 1
-        if not cand.video_files:
-            empty += 1
-            continue
-        candidates.append(cand)
-        if max_ok > 0 and sum(1 for c in candidates if c.size_ok) >= max_ok:
-            logger.info(f"订阅[{name}] 已够 {max_ok} 个合格分享")
+    for start in range(0, len(pending), _PROBE_CONCURRENCY):
+        batch = pending[start : start + _PROBE_CONCURRENCY]
+        # 一条一条串行的话，热门剧 170 多条要跑好几分钟；这里只并发一批，
+        # 探到合格的就停，不把剩下的全探完（用户明确要求：扫到就停，别复盘全表）
+        probed = await asyncio.gather(
+            *(_probe(start + i, item) for i, item in enumerate(batch))
+        )
+        for _idx, cand, err in sorted(probed, key=lambda x: x[0]):
+            if err or cand is None:
+                if err:
+                    failed += 1
+                continue
+            checked += 1
+            if not cand.video_files:
+                empty += 1
+                continue
+            candidates.append(cand)
+        usable = [c for c in candidates if c.title_hit and c.size_ok and c.new_episodes]
+        if max_ok > 0 and len(usable) >= max_ok:
+            logger.info(
+                f"订阅[{name}] 找到 {len(usable)} 个合格分享"
+                f"（片名对得上 + 大小在区间 + 有可补的集），"
+                f"共探 {checked} 个，停止继续扫描"
+            )
             break
 
     # 先只看「文件名里确实带这部剧片名」的分享，盘搜混进来的别的剧不参与竞争；

@@ -27,6 +27,8 @@ class FakeClient:
         self.output = output or ["✅《甄嬛传》新增文件:\n/自动/甄嬛传\n├── S01E10.mkv"]
         self.added = []
         self.deleted = []
+        # 探过详情的分享：早停测试要数「到底探了几个」
+        self.probed = []
 
     async def list_savepath_files(self, savepath):
         return self.local
@@ -39,6 +41,7 @@ class FakeClient:
 
     async def get_share_files(self, shareurl, max_depth=3, max_dirs=40):
         # 真实实现会递归展开子目录；测试里 details 直接给全量文件
+        self.probed.append(shareurl)
         return list(self.details[shareurl].file_list)
 
     async def add_task(self, task):
@@ -248,10 +251,10 @@ async def test_flow_explicit_season_reports_no_season_match():
 
 
 async def test_flow_scans_every_share_before_picking():
-    """默认要扫完全部结果再挑「集数最全」的那个，不能拿到第一个合格的就下。
+    """同一批探完再挑「集数最全」的，不能拿到第一个合格的就下。
 
     真机：走马上任 71 条里合格的有 6 个（9 集 / 9 集 / 7 集 / 2 集 / 7 集 / 5 集），
-    提前停在第一个就会拿着不最全的那份下。
+    同批还有别的合格分享时挑集数最多的那份。
     """
     from nonebot_plugin_quark_autosave import subscribe as sub_mod
 
@@ -264,10 +267,46 @@ async def test_flow_scans_every_share_before_picking():
         {"s": _detail(*small), "m": _detail(*mid), "b": _detail(*big)},
     )
 
-    assert sub_mod.plugin_config.sub_max_ok_candidates == 0  # 默认不提前停
+    assert sub_mod.plugin_config.sub_max_ok_candidates == 1  # 默认扫到合格的就停
     await plugin._run_one_subscription(client, "走马上任")
 
     assert client.added[0].shareurl == "b"
+
+
+async def test_flow_stops_after_first_usable_batch():
+    """扫到符合条件（片名对 + 大小对 + 有缺集）的就停，别把剩下 170 多条全探一遍。
+
+    用户要求：扫到一个看一个，符合条件就下，不要复盘整张搜索结果表。
+    """
+    files = [_file(f"甄嬛传.E{i:02d}.mkv", 2) for i in range(1, 9)]
+    shares = [f"u{i}" for i in range(1, 21)]
+    client = FakeClient(
+        [],
+        [{"shareurl": u, "taskname": "甄嬛传 更至08"} for u in shares],
+        {u: _detail(*files) for u in shares},
+    )
+    await plugin._run_one_subscription(client, "甄嬛传")
+
+    assert client.added and client.added[0].shareurl == "u1"
+    assert len(client.probed) == 4  # 只探了第一批，后面 16 个没碰
+
+
+async def test_flow_keeps_scanning_when_share_has_no_new_episodes():
+    """集数不够也算不合格：本地已到 E05，分享只给 E01~E05，就得继续往后看。"""
+    local = [{"file_name": f"E{i:02d}.mkv", "dir": False} for i in range(1, 6)]
+    old = [_file(f"甄嬛传.E{i:02d}.mkv", 2) for i in range(1, 6)]
+    new = [_file(f"甄嬛传.E{i:02d}.mkv", 2) for i in range(1, 10)]
+    shares = [f"u{i}" for i in range(1, 10)]
+    details = {u: _detail(*old) for u in shares[:5]}
+    details.update({u: _detail(*new) for u in shares[5:]})
+    client = FakeClient(
+        local, [{"shareurl": u, "taskname": "甄嬛传"} for u in shares], details
+    )
+    await plugin._run_one_subscription(client, "甄嬛传")
+
+    # 第一批 4 个都没新集 → 继续扫，第二批才命中
+    assert client.added and client.added[0].shareurl == "u6"
+    assert len(client.probed) == 8
 
 
 async def test_flow_counts_only_episodes_the_pattern_will_transfer():
