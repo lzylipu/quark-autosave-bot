@@ -1,5 +1,6 @@
 """订阅功能：集数解析、季数拆分、大小筛选、差集选源、订阅存取、定时计算。"""
 
+import json
 import re
 from datetime import datetime
 
@@ -224,6 +225,51 @@ class TestSubscriptionStore:
         path = tmp_path / "subs.json"
         path.write_text("not json", encoding="utf-8")
         assert SubscriptionStore(path).list_all() == []
+
+    def test_keeps_backup_of_previous_version(self, tmp_path):
+        """每存一次都留一份 .bak，主文件写坏了还能捞回来。"""
+        store = SubscriptionStore(tmp_path / "subs.json")
+        store.add("甄嬛传")
+        store.add("庆余年")
+        backup = json.loads(store.backup_path.read_text(encoding="utf-8"))
+        # 备份是「上一次的内容」：加了庆余年之后，备份里只有甄嬛传
+        assert list(backup) == ["甄嬛传"]
+
+    def test_truncated_file_falls_back_to_backup(self, tmp_path):
+        """真机事故：容器被 kill 时文件写了半截，只有主文件就当没订阅了。"""
+        store = SubscriptionStore(tmp_path / "subs.json")
+        store.add("甄嬛传")
+        store.add("庆余年")
+        store.path.write_text('{"甄嬛传": {"created', encoding="utf-8")
+        assert SubscriptionStore(store.path).list_all() == ["甄嬛传"]
+
+    def test_save_is_atomic_no_tmp_left(self, tmp_path):
+        store = SubscriptionStore(tmp_path / "subs.json")
+        store.add("甄嬛传")
+        assert not store.path.with_suffix(".json.tmp").exists()
+        assert store.list_all() == ["甄嬛传"]
+
+
+class TestPersistenceCheck:
+    def test_warns_when_not_mounted(self, tmp_path, monkeypatch):
+        """没挂 /app/data 的容器，升级一次订阅全丢——启动就要喊出来。"""
+        from nonebot_plugin_quark_autosave import subscribe as sub_mod
+
+        monkeypatch.setattr(sub_mod, "path_is_mounted", lambda p: False)
+        msg = sub_mod.persistence_warning("/app/data/subscriptions.json")
+        assert msg and "不在挂载卷上" in msg and "-v quarkbot-data:/app/data" in msg
+
+    def test_silent_when_mounted(self, monkeypatch):
+        from nonebot_plugin_quark_autosave import subscribe as sub_mod
+
+        monkeypatch.setattr(sub_mod, "path_is_mounted", lambda p: True)
+        assert sub_mod.persistence_warning("/app/data/subscriptions.json") is None
+
+    def test_root_mount_does_not_count(self):
+        """根目录 / 是所有路径的祖先，不能因为它在就认为「已挂卷」。"""
+        from nonebot_plugin_quark_autosave import subscribe as sub_mod
+
+        assert sub_mod.path_is_mounted("/nonexistent-quarkbot-dir/x.json") is False
 
 
 class TestSecondsUntil:

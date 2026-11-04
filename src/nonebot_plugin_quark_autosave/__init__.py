@@ -31,6 +31,7 @@ from .subscribe import (
     has_explicit_season,
     parse_season,
     pick_best,
+    persistence_warning,
     rename_rules,
     season_rename_rules,
     seconds_until,
@@ -309,6 +310,11 @@ async def handle_sub_command(event: Event):
     for i, name in enumerate(names, 1):
         last = data.get(name, {}).get("last_result", "")
         lines.append(f"{i}. {name}" + (f"\n   └ 上次: {last}" if last else "\n   └ 还没跑过"))
+    # 顺带把存储位置和「会不会因升级丢」说清楚，省得再踩一次
+    if persistence_warning(store.path):
+        lines.append(f"\n⚠️ 存在 {store.path}，但这个目录没挂卷：升级/重建容器后会丢")
+    else:
+        lines.append(f"\n💾 存在 {store.path}（已挂卷，升级不丢）")
     await sub_handler.finish("\n".join(lines))
 
 
@@ -543,8 +549,14 @@ async def _start_subscription_scheduler() -> None:
 
     names = store.list_all()
     logger.info(
-        f"订阅定时器已启动，共 {len(names)} 个订阅，每天 {plugin_config.sub_check_time} 执行"
+        f"订阅文件: {store.path}（{len(names)} 个订阅）"
+        f"，每天 {plugin_config.sub_check_time} 执行"
     )
+    # 没挂卷的容器升级一次就把订阅全丢了 —— 启动时立刻喊出来，别等丢完才知道
+    warning = persistence_warning(store.path)
+    if warning:
+        logger.warning(warning)
+        await _report(warning)
 
     async def _loop():
         while True:

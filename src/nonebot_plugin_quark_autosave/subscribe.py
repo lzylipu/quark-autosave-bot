@@ -14,7 +14,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -75,26 +77,57 @@ def _now_str() -> str:
 
 
 class SubscriptionStore:
-    """订阅列表，JSON 文件持久化（文件里以 __ 开头的键是内部状态）。"""
+    """订阅列表，JSON 文件持久化（文件里以 __ 开头的键是内部状态）。
+
+    写盘是「临时文件 + os.replace」的原子替换，替换前把上一份留成 .bak；
+    读的时候主文件坏了/丢了就退回 .bak。订阅是用户手敲进来的，丢一次就得重敲，
+    不能因为一次断电或半截写入全没。
+    """
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
 
+    @property
+    def backup_path(self) -> Path:
+        return self.path.with_suffix(self.path.suffix + ".bak")
+
     def load(self) -> dict[str, dict]:
-        if not self.path.exists():
-            return {}
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
-        except Exception as exc:
-            logger.error(f"订阅文件损坏，忽略: {exc}")
-            return {}
+        for candidate in (self.path, self.backup_path):
+            if not candidate.exists():
+                continue
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+            except Exception as exc:
+                logger.error(f"订阅文件 {candidate} 读不出来: {exc}")
+                continue
+            if not isinstance(data, dict):
+                continue
+            if candidate is not self.path:
+                logger.warning(f"订阅主文件损坏，已从备份 {candidate.name} 恢复")
+            return data
+        return {}
 
     def save(self, data: dict[str, dict]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        if self.path.exists():
+            try:
+                shutil.copy2(self.path, self.backup_path)
+            except OSError as exc:
+                logger.warning(f"订阅备份没写成（不影响本次保存）: {exc}")
+        os.replace(tmp, self.path)
+
+    def _save_or_explain(self, data: dict[str, dict]) -> bool:
+        """写盘失败时只记日志、返回 False，交给调用方给出人话提示。"""
+        try:
+            self.save(data)
+        except OSError as exc:
+            logger.error(f"订阅文件写不进去 {self.path}: {exc}")
+            return False
+        return True
 
     def add(self, name: str) -> tuple[bool, str]:
         name = name.strip()
@@ -104,7 +137,8 @@ class SubscriptionStore:
         if name in data:
             return False, f"已经订阅过「{name}」"
         data[name] = {"created_at": _now_str(), "last_result": ""}
-        self.save(data)
+        if not self._save_or_explain(data):
+            return False, _save_failed_msg(self.path)
         return True, f"✅ 已订阅「{name}」，每天 {plugin_config.sub_check_time} 自动搜索转存"
 
     def remove(self, name: str) -> tuple[bool, str]:
@@ -435,3 +469,48 @@ def seconds_until(hhmm: str, now: datetime | None = None) -> float:
     if run_at <= now:
         run_at += timedelta(days=1)
     return max((run_at - now).total_seconds(), 60.0)
+
+
+def _save_failed_msg(path: str | Path) -> str:
+    return (
+        f"❌ 订阅没存下来（{path} 写不进去）\n"
+        "　　容器里这个目录不可写，或者根本没挂卷——升级/重建容器后订阅会全丢。\n"
+        "　　compose 里加：volumes: - bot-data:/app/data\n"
+        "　　docker run 加：-v quarkbot-data:/app/data"
+    )
+
+
+def path_is_mounted(path: str | Path) -> bool:
+    """这个路径是否落在挂载卷上（容器重建后数据还在）。
+
+    读 /proc/self/mountinfo 判断：只要某个挂载点（根目录 "/" 除外）是该路径的
+    祖先或本身，就算已挂载。读不到 mountinfo 时按「没挂」处理，宁可多提醒一次。
+    """
+    try:
+        target = Path(path).resolve()
+        info = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.debug(f"读不到 mountinfo，跳过挂载检测: {exc}")
+        return False
+    for line in info.splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        mount_point = Path(parts[4].replace("\\040", " "))
+        if mount_point == Path("/"):
+            continue
+        if target == mount_point or mount_point in target.parents:
+            return True
+    return False
+
+
+def persistence_warning(path: str | Path) -> str | None:
+    """订阅文件不在挂载卷上时返回一句警告，正常情况返回 None。"""
+    if path_is_mounted(path):
+        return None
+    return (
+        f"⚠️ 订阅文件 {path} 不在挂载卷上：现在能正常用，但升级/重建容器后"
+        "所有订阅和聊天绑定会全部丢失。\n"
+        "　　修法：容器加 -v quarkbot-data:/app/data（compose 用 "
+        "volumes: - bot-data:/app/data），再把现有订阅重发一遍 AD 即可。"
+    )

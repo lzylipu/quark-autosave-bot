@@ -141,9 +141,14 @@ DL 甄嬛传        → 取消订阅
 
 ### 🐳 Docker
 
+> ⚠️ **必须挂 `/app/data` 卷**。订阅列表、TG 会话绑定都在 `/app/data/subscriptions.json`，
+> 不挂卷的话 `docker rm` / 升级镜像重建容器时**全部丢失**，只能重新 `AD 片名`。
+> 启动日志里如果看到「`/app/data` 没有挂载卷」，就是这个原因。
+
 ```bash
 docker run -d \
   --name quarkbot \
+  -v quarkbot-data:/app/data \
   -e TELEGRAM_BOT_TOKEN=*** \
   -e QAS_ENDPOINT="http://你的QAS地址:5005" \
   -e QAS_TOKEN=*** \
@@ -299,6 +304,13 @@ PYTHONPATH=src python3 tests/e2e/e2e_share_expand.py    # 真分享递归展开�
 ---
 
 ## 📝 更新日志
+
+### v0.4.3
+
+- 💾 **订阅不会因为升级/重启丢了**：README 里的 `docker run` 示例原来没有 `-v`，容器一重建 `/app/data/subscriptions.json` 就跟着消失。现在示例带 `-v quarkbot-data:/app/data`，并加了一节红字提醒「必须挂卷」
+- 🚨 没挂卷会在启动日志和 TG 里直接喊（`/app/data` 没有挂载卷），`LIST` 也会显示「已挂卷/没挂卷」，不用等丢完才发现
+- 🛟 写订阅改成「临时文件 + 原子替换」，每次保存前把上一份留成 `subscriptions.json.bak`；主文件写坏了自动从备份读回
+- 🧪 新增 6 个单测：备份留存 / 半截文件回退备份 / 无残留临时文件 / 挂卷检测与提示文案
 
 ### v0.4.2
 

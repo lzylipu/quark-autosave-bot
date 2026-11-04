@@ -114,9 +114,15 @@ User sends a Quark link ──→ Extract URL (keeps ?pwd= and #/ subfolder)
 
 ### 🐳 Docker
 
+> ⚠️ **Mount `/app/data` before anything else.** Subscriptions and the Telegram chat
+> binding live in `/app/data/subscriptions.json`. Without the volume, `docker rm` or
+> upgrading the image wipes them and you have to re-send `AD <title>` for every show.
+> If the startup log says "/app/data is not a mounted volume", that is exactly this.
+
 ```bash
 docker run -d \
   --name quarkbot \
+  -v quarkbot-data:/app/data \
   -e TELEGRAM_BOT_TOKEN=*** \
   -e QAS_ENDPOINT="http://your-qas-address:5005" \
   -e QAS_TOKEN=*** \
@@ -302,6 +308,13 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 ---
 
 ## 📝 Changelog
+
+### v0.4.3
+
+- 💾 **Subscriptions survive upgrades and restarts**: the `docker run` sample had no `-v`, so recreating the container wiped `/app/data/subscriptions.json`. It now ships with `-v quarkbot-data:/app/data` plus a red-box warning that the volume is mandatory
+- 🚨 A container without the volume says so loudly at startup (log + Telegram), and `LIST` shows whether storage is mounted
+- 🛟 Saves are atomic (temp file + replace) and keep the previous version as `subscriptions.json.bak`; a truncated main file is read back from the backup
+- 🧪 6 new unit tests: backup retention / truncated-file fallback / no leftover temp file / mount detection and message
 
 ### v0.4.2
 

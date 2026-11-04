@@ -36,4 +36,16 @@ SUB_FALLBACK_MIN_SIZE_GB=${SUB_FALLBACK_MIN_SIZE_GB:-0.5}
 SUB_STORE_FILE=${SUB_STORE_FILE:-/app/data/subscriptions.json}
 ENDENV
 
+# 订阅文件持久化自检：/app/data 必须是挂载卷，否则重建/升级容器订阅全丢
+if grep -q " /app/data " /proc/self/mountinfo 2>/dev/null; then
+  echo "[quarkbot] 数据目录 /app/data 已挂卷，订阅/聊天绑定会保留"
+else
+  echo "============================================================"
+  echo "[quarkbot] 警告：/app/data 没有挂载卷！"
+  echo "[quarkbot] 现在能正常用，但重建或升级容器后订阅会全部丢失。"
+  echo "[quarkbot] 修法：docker run 加  -v quarkbot-data:/app/data"
+  echo "[quarkbot]       compose 加  volumes: - bot-data:/app/data"
+  echo "============================================================"
+fi
+
 exec python /app/bot.py
