@@ -426,10 +426,19 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
         task.pattern, task.replace = season_rename_rules(season)
     else:
         task.pattern, task.replace = rename_rules(season, keep_season_in_name=keep_season)
+    # pattern 同时是 QASx 的筛选条件：匹配不上文件名不转存。所以「新增几集」
+    # 只能算真正会被转存的那几集——合集里既有 S02E05 又有 E01 时，E01 会被跳过
+    # （真机：法警小队 报「新增 15 集」，落盘只有 3 个）。
+    # 预算不出来时（文件名写法比本地正则更野）不能拦，交给 QASx 自己判断。
+    transferable = [n for n in best.video_files if re.search(task.pattern, n)]
+    transfer_keys = best.new_episodes & episode_keys(transferable, season)
+    dropped = best.new_episodes - transfer_keys if transfer_keys else set()
+    if not transfer_keys:
+        transfer_keys = best.new_episodes
     # 交给 QASx 任务默认配置；注意别写成 None —— null 会让 QASx 的 /update 直接 500
     task.addition = {}
 
-    new_desc = f"新增 {fmt_episode_keys(best.new_episodes)}（{len(best.new_episodes)} 集）"
+    new_desc = f"新增 {fmt_episode_keys(transfer_keys)}（{len(transfer_keys)} 集）"
     logger.info(f"订阅[{name}] 选中 {best.shareurl} {new_desc}")
     try:
         await client.add_task(task)
@@ -454,6 +463,11 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
         lines.append(
             f"　　⚠️ 没有 {plugin_config.sub_min_size_gb}~{plugin_config.sub_max_size_gb}G 的分享，"
             f"改用每集约 {best.median_gb:.2f}G 的（正片偏小，画质可能一般）"
+        )
+    if dropped:
+        lines.append(
+            f"　　⚠️ 另有 {len(dropped)} 集文件名不带季数，按命名规则转不了，本轮跳过"
+            f"（{fmt_episode_keys(dropped)}）"
         )
     if not cleaned:
         lines.append("　　⚠️ 任务未从 QAS 删除，请手动清理")

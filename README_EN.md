@@ -310,6 +310,8 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 - 🎯 Title must match: search results contain other shows from the same slot (《尚公主》 once picked a 7.85G 《黄金时段/Primetime》); matching now uses both the result title and the file names
 - ⚖️ Smaller episodes can still download: when nothing is in range, fall back to shares whose median episode is at least `SUB_FALLBACK_MIN_SIZE_GB` (default 0.5G), and say so in the report; 0.3G cam-rips are still rejected
 - 📊 Failure reports now state how many shares were checked, how many were dead links / had no videos, and the measured median size range
+- 🐞 Fixed shares named purely by episode number transferring nothing: `01.mkv`~`08.mkv` never matched the rename pattern, so the task reported success while saving 0 files (reproduced live with 我的阿勒泰, 8 eps). Rewritten names like `24-4K-S.mp4` now match too
+- 🔢 The reported episode count now counts only files that will actually transfer (法警小队 used to claim 15 eps and save 3)
 - ✅ 4 new unit tests; verified on a live instance against six subscriptions (走马上任 9 eps, 尚公主 24 eps, 伟大的长征 39 eps, 幻视任务, 法警小队, 黑帮领地), with 法警小队 actually transferred (2 eps) and its task deleted
 
 ### v0.3.1

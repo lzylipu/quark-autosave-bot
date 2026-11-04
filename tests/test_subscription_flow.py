@@ -199,7 +199,9 @@ async def test_flow_ignores_share_of_another_show(monkeypatch):
 
     monkeypatch.setattr(sub_mod.plugin_config, "sub_fallback_min_size_gb", 0.5)
     other = [_file("Primetime.2026.1080p.AMZN.WEB-DL.mkv", 7.85)]
-    real = [_file(f"{i}-4K-S.mp4", 1.2) for i in (22, 23, 24)]
+    # 真机里这类分享的文件名常被改成 `24-4K-S.mp4`，QASx 的命名正则匹配不上，
+    # 一个都转不了；这里用能匹配的写法，只验「别的剧不能选」
+    real = [_file(f"尚公主.E{i}.4K.mkv", 1.2) for i in (22, 23, 24)]
     client = FakeClient(
         [],
         [
@@ -243,6 +245,25 @@ async def test_flow_explicit_season_reports_no_season_match():
 
     assert client.added == []
     assert "最新" in report or "没有新集" in report
+
+
+async def test_flow_counts_only_episodes_the_pattern_will_transfer():
+    """合集里混排「S02E04」和「E01」时，只能把真会转存的那几集算成新增。
+
+    真机：法警小队 选中一个 20 个视频的分享，报「新增 S01E01~E13、S02E04~E05（15 集）」，
+    实际落盘只有 3 个——因为命名规则要求文件名带季数，E01 这种被 QASx 直接跳过。
+    """
+    share_files = [
+        _file("Marshals.S02E04.2160p.mkv", 4.35),
+        _file("Marshals.S02E05.2160p.mkv", 7.52),
+    ] + [_file(f"E{i:02d}.mkv", 4.6) for i in range(1, 14)]
+    client = FakeClient([], [{"shareurl": "u1"}], {"u1": _detail(*share_files)})
+
+    report = await plugin._run_one_subscription(client, "法警小队")
+
+    assert len(client.added) == 1
+    assert "新增 E04~E05（2 集）" in report
+    assert "另有 13 集" in report
 
 
 async def test_run_all_survives_unwritable_store(tmp_path, monkeypatch):

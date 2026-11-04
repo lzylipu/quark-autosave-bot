@@ -85,6 +85,19 @@ class TestRenameRules:
         assert self._apply("甄嬛传.2160p.WEB-DL.第01集.mkv") == "S01E01.mkv"
         assert self._apply("甄嬛传.[1080p].05.mkv") == "S01E05.mkv"
 
+    def test_bare_episode_number_file(self):
+        """整份分享就是 01.mkv~08.mkv 这种：必须能匹配，否则一集都转不了。
+
+        真机：我的阿勒泰 8 集全是 01.mkv，原正则要求集数前有分隔符，
+        一个文件都匹配不上 → QASx 判「没有新文件」→ 任务成功但落 0 个文件。
+        """
+        assert self._apply("01.mkv") == "S01E01.mkv"
+        assert self._apply("08.mp4") == "S01E08.mp4"
+        assert self._apply("2024.01.mkv") == "S01E01.mkv"
+        # 纯分辨率/年份不能变成集数
+        assert self._apply("1080p.mkv") == "1080p.mkv"
+        assert self._apply("2160p.mkv") == "2160p.mkv"
+
     def test_season_two(self):
         assert self._apply("庆余年.01.mkv", season=2) == "S02E01.mkv"
         assert self._apply("庆余年.S02E07.mkv", season=2) == "S02E07.mkv"
