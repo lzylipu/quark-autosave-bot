@@ -23,8 +23,12 @@ services:
       # 每集大小区间（GB）
       SUB_MIN_SIZE_GB: "${SUB_MIN_SIZE_GB:-1.5}"
       SUB_MAX_SIZE_GB: "${SUB_MAX_SIZE_GB:-8.0}"
-      # 每个订阅最多检查多少个搜索结果
-      SUB_MAX_CANDIDATES: "${SUB_MAX_CANDIDATES:-10}"
+      # 每个订阅最多检查多少个搜索结果（0 = 搜到多少看多少）
+      SUB_MAX_CANDIDATES: "${SUB_MAX_CANDIDATES:-0}"
+      # 凑够这么多个合格分享就停止继续扫（0 = 不提前停）
+      SUB_MAX_OK_CANDIDATES: "${SUB_MAX_OK_CANDIDATES:-5}"
+      # 全都不在区间内时退一档的下限（每集中位数 GB，挡枪版）
+      SUB_FALLBACK_MIN_SIZE_GB: "${SUB_FALLBACK_MIN_SIZE_GB:-0.5}"
     volumes:
       # 订阅列表持久化，重建容器不丢
       - bot-data:/app/data

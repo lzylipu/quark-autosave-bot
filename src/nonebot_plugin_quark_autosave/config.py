@@ -19,8 +19,14 @@ class Config(BaseModel):
     # 每集大小下限/上限（GB），用于筛选分享
     sub_min_size_gb: float = 1.5
     sub_max_size_gb: float = 8.0
-    # 每个订阅最多检查多少个搜索结果（都是要逐个探分享详情的，别太大）
-    sub_max_candidates: int = 10
+    # 每个订阅最多检查多少个搜索结果；0 = 搜到多少看多少（默认）
+    # 原来写死 10：走马上任 71 条结果里前 10 条全不合格、第 25 条才符合，
+    # 结果直接报「检查了 10 个分享，都不在 1.5~8.0G 区间」（真机复现）
+    sub_max_candidates: int = 0
+    # 已经凑够这么多个合格分享就不再继续扫（省时间）；0 = 不提前停
+    sub_max_ok_candidates: int = 5
+    # 全部都不在区间内时退一档：每集中位数 >= 这个值就当正片下（0.5G 挡枪版）
+    sub_fallback_min_size_gb: float = 0.5
     # 订阅列表存放路径
     sub_store_file: str = "data/subscriptions.json"
 

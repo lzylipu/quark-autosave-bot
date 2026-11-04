@@ -339,9 +339,13 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
         return f"❌ 没搜到「{title}」的资源\n　　{local_desc}"
 
     # 3. 逐个探分享：大小合格 + 能补几集
+    # sub_max_candidates=0（默认）表示搜到多少看多少：盘搜按热度排序，合格资源常在
+    # 几十条之后（走马上任第 25 条才有 1.5~8G 的），原来只看前 10 条会漏掉全部。
+    limit = plugin_config.sub_max_candidates
+    max_ok = plugin_config.sub_max_ok_candidates
     candidates: list[Candidate] = []
-    checked = 0
-    for item in results[: plugin_config.sub_max_candidates]:
+    checked = failed = empty = ok_count = 0
+    for item in (results if limit <= 0 else results[:limit]):
         shareurl = str(item.get("shareurl", "")).strip()
         if not shareurl:
             continue
@@ -350,33 +354,65 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
             files = await client.get_share_files(shareurl)
         except QASException as exc:
             # 链接失效是常态，换下一个
+            failed += 1
             logger.info(f"订阅[{name}] 跳过分享 {shareurl}: {exc}")
             continue
-        candidates.append(
-            _only_season(
-                assess_share(
-                    shareurl,
-                    files,
-                    local_keys,
-                    plugin_config.sub_min_size_gb,
-                    plugin_config.sub_max_size_gb,
-                    season,
-                ),
+        cand = _only_season(
+            assess_share(
+                shareurl,
+                files,
+                local_keys,
+                plugin_config.sub_min_size_gb,
+                plugin_config.sub_max_size_gb,
                 season,
-                only_season,
-            )
+                title,
+                str(item.get("taskname") or ""),
+            ),
+            season,
+            only_season,
         )
+        if not cand.video_files:
+            empty += 1
+            continue
+        candidates.append(cand)
+        if cand.size_ok:
+            ok_count += 1
+            if max_ok > 0 and ok_count >= max_ok:
+                logger.info(f"订阅[{name}] 已够 {ok_count} 个合格分享，停止继续扫描")
+                break
 
-    best = pick_best(candidates)
+    # 先只看「文件名里确实带这部剧片名」的分享，盘搜混进来的别的剧不参与竞争；
+    # 一个都没带片名时（文件名用英文/缩写）退回全体，避免全军覆没。
+    pool = [c for c in candidates if c.title_hit] or candidates
+
+    best = pick_best(pool)
+    fallback = False
     if best is None:
+        # 没有落在 1.5~8G 的：退一档用「每集中位数 >= sub_fallback_min_size_gb」的。
+        # 有些剧 4K 压得小（尚公主每集 1.15~1.4G），卡死下限就一集都下不来。
+        relaxed = [
+            c
+            for c in pool
+            if plugin_config.sub_fallback_min_size_gb
+            <= c.median_gb
+            <= plugin_config.sub_max_size_gb
+        ]
+        best = pick_best(relaxed, require_size_ok=False)
+        fallback = best is not None
+    if best is None:
+        stats = f"检查了 {checked} 个分享（{failed} 个链接失效、{empty} 个没有视频文件）"
         if not candidates:
-            return f"❌ 检查了 {checked} 个分享，全部打不开（链接失效）\n　　{local_desc}"
-        if not any(c.size_ok for c in candidates):
+            return f"❌ {stats}，没有可用资源\n　　{local_desc}"
+        if not any(c.size_ok for c in pool):
+            medians = sorted(round(c.median_gb, 2) for c in candidates if c.median_gb)
+            span = f"，实测每集中位数 {medians[0]}~{medians[-1]}G" if medians else ""
             return (
-                f"❌ 检查了 {checked} 个分享，都不在 "
-                f"{plugin_config.sub_min_size_gb}~{plugin_config.sub_max_size_gb}G 区间\n　　{local_desc}"
+                f"❌ {stats}，都不在 "
+                f"{plugin_config.sub_min_size_gb}~{plugin_config.sub_max_size_gb}G 区间"
+                f"{span}（退一档下限 {plugin_config.sub_fallback_min_size_gb}G）\n"
+                f"　　{local_desc}"
             )
-        return f"✅ 已经是最新，没有新集\n　　{local_desc}"
+        return f"✅ 已经是最新，没有新集\n　　{local_desc}（{stats}）"
 
     # 4. 建任务（统一重命名成 SxxExx）→ 转存 → 删任务
     task = TaskItem.simple_from_title(title, best.shareurl)
@@ -414,6 +450,11 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
     # 「没有新文件」时不能再说「新增了哪些集」——那句预测和实际结果会互相打架
     detail = local_desc if result.status == "no_new" else f"{local_desc} → {new_desc}"
     lines = [head, f"　　{detail}"]
+    if fallback:
+        lines.append(
+            f"　　⚠️ 没有 {plugin_config.sub_min_size_gb}~{plugin_config.sub_max_size_gb}G 的分享，"
+            f"改用每集约 {best.median_gb:.2f}G 的（正片偏小，画质可能一般）"
+        )
     if not cleaned:
         lines.append("　　⚠️ 任务未从 QAS 删除，请手动清理")
     return "\n".join(lines)

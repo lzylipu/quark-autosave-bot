@@ -130,6 +130,90 @@ async def test_flow_without_results_reports():
     assert "没搜到" in report
 
 
+async def test_flow_scans_beyond_first_ten_candidates(monkeypatch):
+    """真机 bug：走马上任 71 条结果里，前 10 条全不合格，第 25 条才有 1.5~8G 的。
+
+    程序当时只看前 10 条就报「检查了 10 个分享，都不在 1.5~8.0G 区间」，实际有资源。
+    """
+    from nonebot_plugin_quark_autosave import subscribe as sub_mod
+
+    monkeypatch.setattr(sub_mod.plugin_config, "sub_max_candidates", 10)
+    monkeypatch.setattr(sub_mod.plugin_config, "sub_max_ok_candidates", 5)
+
+    shares = [f"u{i}" for i in range(1, 13)]
+    details = {
+        u: _detail(*[_file(f"E{i}.mkv", 0.3) for i in (1, 2)]) for u in shares[:-1]
+    }
+    details[shares[-1]] = _detail(*[_file(f"E{i}.mkv", 2.5) for i in (1, 2)])
+    client = FakeClient([], [{"shareurl": u} for u in shares], details)
+
+    # 限制 10 条时确实只看 10 条（保留可配置语义）
+    report = await plugin._run_one_subscription(client, "走马上任")
+    assert client.added == []
+    assert "检查了 10 个分享" in report
+
+    client2 = FakeClient([], [{"shareurl": u} for u in shares], details)
+    monkeypatch.setattr(sub_mod.plugin_config, "sub_max_candidates", 0)
+    await plugin._run_one_subscription(client2, "走马上任")
+    assert client2.added and client2.added[0].shareurl == shares[-1]
+
+
+async def test_flow_falls_back_when_nothing_in_size_window(monkeypatch):
+    """真机 bug：尚公主 4K 每集只有 1.15~1.4G，全部落在 1.5G 下限之外，一张都下不来。
+
+    没有 1.5~8G 的分享时，退一步用每集中位数 >= 0.5G 的（正片偏小 ≠ 枪版），
+    并在报告里说清楚用的是哪一档。
+    """
+    from nonebot_plugin_quark_autosave import subscribe as sub_mod
+
+    monkeypatch.setattr(sub_mod.plugin_config, "sub_fallback_min_size_gb", 0.5)
+    files = [_file(f"尚公主.{i:02d}.mp4", 1.2) for i in (20, 21, 22)]
+    client = FakeClient([], [{"shareurl": "u1"}], {"u1": _detail(*files)})
+
+    report = await plugin._run_one_subscription(client, "尚公主")
+
+    assert client.added, "没有合格分享时应该退一档把偏小的正片下下来"
+    assert "改用" in report
+
+
+async def test_flow_still_rejects_tiny_garbage(monkeypatch):
+    """退档也不能把 0.3G 的枪版当正片下。"""
+    from nonebot_plugin_quark_autosave import subscribe as sub_mod
+
+    monkeypatch.setattr(sub_mod.plugin_config, "sub_fallback_min_size_gb", 0.5)
+    files = [_file(f"E{i:02d}.mkv", 0.3) for i in (1, 2)]
+    client = FakeClient([], [{"shareurl": "u1"}], {"u1": _detail(*files)})
+
+    report = await plugin._run_one_subscription(client, "甄嬛传")
+
+    assert client.added == []
+    assert "都不在" in report
+
+
+async def test_flow_ignores_share_of_another_show(monkeypatch):
+    """真机 bug：尚公主搜到「黄金时段」的 7.85G 单集，大小正好在区间内被选中。
+
+    真实分享的文件名常被改成 `24.4K-S.mp4`，所以片名匹配同时看搜索结果标题。
+    """
+    from nonebot_plugin_quark_autosave import subscribe as sub_mod
+
+    monkeypatch.setattr(sub_mod.plugin_config, "sub_fallback_min_size_gb", 0.5)
+    other = [_file("Primetime.2026.1080p.AMZN.WEB-DL.mkv", 7.85)]
+    real = [_file(f"{i}-4K-S.mp4", 1.2) for i in (22, 23, 24)]
+    client = FakeClient(
+        [],
+        [
+            {"shareurl": "other", "taskname": "【黄金时段 】1080p高码[中英字幕][2026]"},
+            {"shareurl": "real", "taskname": "尚公主 4K更至24"},
+        ],
+        {"other": _detail(*other), "real": _detail(*real)},
+    )
+
+    await plugin._run_one_subscription(client, "尚公主")
+
+    assert client.added and client.added[0].shareurl == "real"
+
+
 async def test_flow_explicit_season_ignores_other_seasons():
     """真机 bug：订阅「黑镜 S05」选中了第七季的分享，把 S07E01~E06 下进了黑镜目录。"""
     other = [_file(f"Little.Black.Mirror.S07E{i:02d}.mkv", 2) for i in range(1, 7)]

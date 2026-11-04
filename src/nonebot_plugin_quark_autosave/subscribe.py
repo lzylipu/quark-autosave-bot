@@ -331,6 +331,29 @@ class Candidate:
     new_episodes: set = field(default_factory=set)
     size_ok: bool = False
     note: str = ""
+    # 每集大小的中位数（GB）：区间外时用它判断「正片偏小」还是「枪版/花絮」
+    median_gb: float = 0.0
+    # 文件名里出现了订阅的片名（排除盘搜混进来的别的剧）
+    title_hit: bool = False
+
+
+def video_median_gb(files) -> float:
+    """视频文件每集大小的中位数（GB）。没有视频返回 0。
+
+    用中位数而不是最小值：分享里常混一个预告片/花絮，取最小值会把整份判成枪版。
+    """
+    sizes = sorted(
+        (getattr(f, "size", 0) or 0) / GB
+        for f in files
+        if not getattr(f, "dir", False)
+        and f.file_name.rsplit(".", 1)[-1].lower() in VIDEO_EXTS
+    )
+    if not sizes:
+        return 0.0
+    mid = len(sizes) // 2
+    if len(sizes) % 2:
+        return sizes[mid]
+    return (sizes[mid - 1] + sizes[mid]) / 2
 
 
 def check_share(files, min_gb: float, max_gb: float) -> tuple[bool, str]:
@@ -354,24 +377,40 @@ def assess_share(
     min_gb: float,
     max_gb: float,
     season: int = 1,
+    title: str = "",
+    share_title: str = "",
 ) -> Candidate:
     """评估一个分享：大小是否合格 + 能补多少新集（按「季-集」比）。"""
     size_ok, note = check_share(files, min_gb, max_gb)
     names = video_names_from_share(files)
     share_keys = episode_keys(names, season)
     new_eps = share_keys - _as_keys(local_eps, season)
+    # 片名要对得上才算「这部剧」：盘搜会混进同档期别的剧，只按大小筛会下错内容
+    # （真机：尚公主 选中过 7.85G 的「黄金时段 / Primetime」）。
+    # 文件名常被改成 24.4K-S.mp4 这种，所以搜索结果的标题也算一次匹配。
+    hit = bool(title) and (
+        title in share_title or any(title in name for name in names)
+    )
     return Candidate(
         shareurl=shareurl,
         video_files=names,
         new_episodes=new_eps,
         size_ok=size_ok,
         note=note,
+        median_gb=video_median_gb(files),
+        title_hit=hit,
     )
 
 
-def pick_best(candidates: Iterable[Candidate]) -> Candidate | None:
+def pick_best(
+    candidates: Iterable[Candidate], require_size_ok: bool = True
+) -> Candidate | None:
     """选「能补最多集」的合格分享；同分取先搜到的（盘搜按时间倒序）。"""
-    usable = [c for c in candidates if c.size_ok and c.new_episodes]
+    usable = [
+        c
+        for c in candidates
+        if (c.size_ok or not require_size_ok) and c.new_episodes
+    ]
     if not usable:
         return None
     return max(usable, key=lambda c: len(c.new_episodes))

@@ -42,7 +42,7 @@ English · [简体中文](./README.md)
 - 🔒 **Optional Access Control** — leave `SUPERUSER` empty and private chats just work; set it to pin the allowed IDs (groups are always ignored)
 - ⬇️ **Aria2 Auto-Download** — Automatically downloads saved files via Aria2
 - 📺 **Series Subscriptions** — `AD <title>` and every day at 17:00 the bot searches for fresh releases, fills in missing episodes and deletes the task
-- 📏 **Per-Episode Size Filter** — only shares where every episode falls in 1.5~8 GB are used; posters and extras don't affect the check
+- 📏 **Per-Episode Size Filter** — prefers shares where every episode falls in 1.5~8 GB; when none exists (heavily compressed 4K) it falls back to episodes ≥0.5 GB and says so in the reply. Posters and extras don't affect the check
 - 🧩 **Episode Gap Filling** — scans the save folder for episodes you already have and transfers only what's missing
 - 🏷️ **Consistent Naming** — saved files always carry a season prefix: `E05.mkv` or `第5集` → `S01E05.mkv`
 
@@ -189,7 +189,9 @@ scan save folder ──→ episodes you already have (E05 / S01E05 / 第5集 all
 | `SUB_CHECK_TIME` | | `17:00` | Daily subscription run time (HH:MM) |
 | `SUB_MIN_SIZE_GB` | | `1.5` | Minimum size per episode in GB |
 | `SUB_MAX_SIZE_GB` | | `8.0` | Maximum size per episode in GB |
-| `SUB_MAX_CANDIDATES` | | `10` | Max search results checked per subscription |
+| `SUB_MAX_CANDIDATES` | | `0` | Max search results checked per subscription; `0` = scan all (good copies often rank dozens deep) |
+| `SUB_MAX_OK_CANDIDATES` | | `5` | Stop scanning once this many in-range shares were found (`0` = never stop early) |
+| `SUB_FALLBACK_MIN_SIZE_GB` | | `0.5` | Fallback floor: when nothing is in range, accept shares whose median episode is at least this size |
 | `SUB_STORE_FILE` | | `/app/data/subscriptions.json` | Subscription list path (`bot-data` volume in compose) |
 | `ASK_PASSCODE` | | `true` | Ask for the passcode in chat when a share requires one |
 
@@ -300,6 +302,15 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 ---
 
 ## 📝 Changelog
+
+### v0.4.0
+
+- 🔍 Subscriptions no longer stop at the first 10 shares: `SUB_MAX_CANDIDATES` now defaults to `0` (scan everything). For 《走马上任》 the first 10 of 71 results had no 1.5~8G copy; the qualifying share was #25
+- ⏹️ Stop scanning once `SUB_MAX_OK_CANDIDATES` (default 5) in-range shares are found
+- 🎯 Title must match: search results contain other shows from the same slot (《尚公主》 once picked a 7.85G 《黄金时段/Primetime》); matching now uses both the result title and the file names
+- ⚖️ Smaller episodes can still download: when nothing is in range, fall back to shares whose median episode is at least `SUB_FALLBACK_MIN_SIZE_GB` (default 0.5G), and say so in the report; 0.3G cam-rips are still rejected
+- 📊 Failure reports now state how many shares were checked, how many were dead links / had no videos, and the measured median size range
+- ✅ 4 new unit tests; verified on a live instance against six subscriptions (走马上任 9 eps, 尚公主 24 eps, 伟大的长征 39 eps, 幻视任务, 法警小队, 黑帮领地), with 法警小队 actually transferred (2 eps) and its task deleted
 
 ### v0.3.1
 
