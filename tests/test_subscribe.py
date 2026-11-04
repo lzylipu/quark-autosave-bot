@@ -7,12 +7,16 @@ import pytest
 
 from nonebot_plugin_quark_autosave.model import FileItem
 from nonebot_plugin_quark_autosave.subscribe import (
+    TV_PATTERN,
     SubscriptionStore,
     assess_share,
     check_share,
+    episode_keys,
     episodes_of,
+    fmt_episode_keys,
     fmt_episodes,
     parse_episode,
+    parse_season,
     pick_best,
     rename_rules,
     seconds_until,
@@ -128,7 +132,27 @@ class TestAssessAndPick:
         files = [_file(f"甄嬛传.E{i:02d}.mkv") for i in range(1, 13)]
         cand = assess_share("https://pan.quark.cn/s/aaa", files, {1, 2, 3}, 1.5, 8)
         assert cand.size_ok
-        assert cand.new_episodes == set(range(4, 13))
+        assert cand.new_episodes == {(1, ep) for ep in range(4, 13)}
+
+    def test_multi_season_episodes_are_not_confused(self):
+        """合集里 S03E01 和 S01E01 是两集，本地有 S01E01 不能算 S03E01 已有。"""
+        files = [
+            _file("航拍中国第三季.Aerial.China.2020.S03.EP01.mp4"),
+            _file("航拍中国第三季.Aerial.China.2020.S03.EP02.mp4"),
+        ]
+        cand = assess_share("u", files, {(1, 1), (1, 2)}, 1.5, 8)
+        assert cand.new_episodes == {(3, 1), (3, 2)}
+
+    def test_season_in_name_keeps_its_own_season(self):
+        pattern, replace = rename_rules(1, keep_season_in_name=True)
+        assert replace == r"S\1E\2.\3"
+        src = "航拍中国第三季.Aerial.China.2020.S03.EP07.1080p.HD国语中字无水印.mp4"
+        assert re.sub(pattern, replace, src) == "S03E07.mp4"
+        assert parse_season(src) == 3
+
+    def test_single_season_share_still_forced_to_subscription_season(self):
+        pattern, replace = rename_rules(2)
+        assert re.sub(pattern, replace, "某剧.E05.mkv") == "S02E05.mkv"
 
     def test_no_new_episodes_when_local_complete(self):
         files = [_file(f"E{i:02d}.mkv") for i in (1, 2, 3)]
@@ -201,3 +225,20 @@ class TestSecondsUntil:
     def test_invalid_falls_back(self):
         now = datetime(2026, 11, 1, 18, 0)
         assert seconds_until("bad", now) == pytest.approx(23 * 3600)
+
+
+class TestSeasonHelpers:
+    def test_parse_season_variants(self):
+        assert parse_season("航拍中国第三季.Aerial.China.2020.S03.EP07.1080p.mp4") == 3
+        assert parse_season("某剧 s2e05.mkv") == 2
+        assert parse_season("某剧 第二季 05.mp4") == 2
+        assert parse_season("某剧.E05.mkv") is None
+
+    def test_episode_keys_defaults_to_subscription_season(self):
+        assert episode_keys(["某剧.E05.mkv"], 2) == {(2, 5)}
+        assert episode_keys(["某剧.S03E05.mkv"], 2) == {(3, 5)}
+
+    def test_fmt_episode_keys_single_and_multi_season(self):
+        assert fmt_episode_keys({(1, 1), (1, 2), (1, 3)}) == "E01~E03"
+        assert fmt_episode_keys({(1, 1), (3, 5)}) == "S01E01、S03E05"
+        assert fmt_episode_keys(set()) == "无"

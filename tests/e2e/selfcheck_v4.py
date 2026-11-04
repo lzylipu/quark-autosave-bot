@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import sys
+from datetime import datetime
 
 import nonebot
 
@@ -21,10 +22,16 @@ from nonebot_plugin_quark_autosave.client import QASClient
 from nonebot_plugin_quark_autosave.model import TaskItem
 from nonebot_plugin_quark_autosave.result import parse_run_output
 
-NAME = "_bot自检_转存"
+# 任务名每次都不同：QASx 的查重除了扫保存目录，还会按「分享文件 file_id + taskname」
+# 查 transfer_records 数据库（check_file_exists_in_records）。沿用同一个 taskname 跑第二遍，
+# 第一轮就会被判成「没有新的文件需要转存」——那是 QASx 的记录命中，不是转存坏了。
+# 第一轮用唯一名证明真落盘，第二轮沿用同名证明去重。
+RUN_ID = os.environ.get("SELFCHECK_RUN_ID") or datetime.now().strftime("%m%d%H%M%S")
+NAME = f"_bot自检_转存_{RUN_ID}"
 SAVEPATH = "/自动/_bot自检"
 USED_FILE = "/app/used_shares.json"
-LOG = open("/app/selfcheck.log", "w", encoding="utf-8")
+LOG_PATH = os.environ.get("SELFCHECK_LOG", "/app/selfcheck.log")
+LOG = open(LOG_PATH, "w", encoding="utf-8")
 OK, FAIL, NOTES = [], [], []
 
 

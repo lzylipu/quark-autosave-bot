@@ -48,6 +48,19 @@ def test_parse_success_with_savepath_and_files():
     assert "/自动/某某剧集" in result.render()
 
 
+def test_parse_nested_tree_does_not_count_directory_as_file():
+    """嵌套分享的树里有一行是目录，报数时不能算成文件。"""
+    output = """✅《某某剧集》新增文件:
+/自动/某某剧集
+├── 📁 S01-S03
+│   ├── 🎞️ S01E01.mkv
+│   └── 🎞️ S01E02.mkv
+└── 🎞️ S01E03.mkv"""
+    result = parse_run_output([output])
+    assert result.files == ["S01E01.mkv", "S01E02.mkv", "S01E03.mkv"]
+    assert "3 个文件" in result.render()
+
+
 def test_parse_failure_messages_are_preserved():
     result = parse_run_output(["❌《某某剧集》转存失败: 空间不足"])
     assert result.status == "failed"
@@ -90,3 +103,24 @@ def test_render_falls_back_to_task_savepath():
     result = parse_run_output([SUCCESS_BLOCK])
     result.savepath = None
     assert "/自动/兜底路径" in result.render(fallback_savepath="/自动/兜底路径")
+
+
+def test_parse_no_new_files_is_not_an_error():
+    """QASx 明确说没有新文件 = 正常结果，不能报成「没解析到结果/登录失效」。"""
+    out = """===============程序开始===============
+任务完成: 没有新的文件需要转存
+===============程序结束==============="""
+    result = parse_run_output([out])
+    assert result.status == "no_new"
+    assert "已是最新" in result.render()
+    assert "登录态" not in result.render()
+
+
+def test_no_new_mark_does_not_hide_real_success():
+    out = """✅《某剧》新增文件:
+/自动/某剧
+└── 🎞️ S01E01.mkv
+任务完成: 没有新的文件需要转存"""
+    result = parse_run_output([out])
+    assert result.status == "success"
+    assert result.files == ["S01E01.mkv"]

@@ -3,15 +3,15 @@ import asyncio
 import os
 import sys
 
-os.environ["QAS_ENDPOINT"] = "http://127.0.0.1:5599"
-os.environ["QAS_TOKEN"] = "231436838b70dc9a"
-os.environ["DRIVER"] = "~httpx"
-os.environ["QAS_RUN_TIMEOUT"] = "60"
-os.environ["SUB_MIN_SIZE_GB"] = "0.05"
-os.environ["SUB_MAX_SIZE_GB"] = "8.0"
-os.environ["SUB_MAX_CANDIDATES"] = "6"
-os.environ["SIMPLE_SAVE_ROOT"] = "自动"
-sys.path.insert(0, "/home/agent/.hermes/workspace/quark-autosave-bot/src")
+os.environ.setdefault("QAS_ENDPOINT", "http://127.0.0.1:5599")
+os.environ.setdefault("QAS_TOKEN", "231436838b70dc9a")
+os.environ.setdefault("DRIVER", "~httpx")
+os.environ.setdefault("QAS_RUN_TIMEOUT", "60")
+os.environ.setdefault("SUB_MIN_SIZE_GB", "0.05")
+os.environ.setdefault("SUB_MAX_SIZE_GB", "8.0")
+os.environ.setdefault("SUB_MAX_CANDIDATES", "6")
+os.environ.setdefault("SIMPLE_SAVE_ROOT", "自动")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2] / "src"))
 
 import nonebot
 

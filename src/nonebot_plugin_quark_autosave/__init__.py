@@ -25,8 +25,9 @@ from .subscribe import (
     Candidate,
     SubscriptionStore,
     assess_share,
-    episodes_of,
-    fmt_episodes,
+    episode_keys,
+    fmt_episode_keys,
+    parse_season,
     pick_best,
     rename_rules,
     seconds_until,
@@ -311,8 +312,8 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
 
     # 1. 本地已有哪几集
     local_files = await client.list_savepath_files(savepath)
-    local_eps = episodes_of(video_names_from_dir(local_files))
-    local_desc = f"本地已有 {fmt_episodes(local_eps)}" if local_eps else "本地还没有剧集"
+    local_keys = episode_keys(video_names_from_dir(local_files), season)
+    local_desc = f"本地已有 {fmt_episode_keys(local_keys)}" if local_keys else "本地还没有剧集"
 
     # 2. 搜资源
     try:
@@ -340,9 +341,10 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
             assess_share(
                 shareurl,
                 files,
-                local_eps,
+                local_keys,
                 plugin_config.sub_min_size_gb,
                 plugin_config.sub_max_size_gb,
+                season,
             )
         )
 
@@ -361,11 +363,14 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
     task = TaskItem.simple_from_title(title, best.shareurl)
     task.taskname = sanitize_title(title)
     task.savepath = savepath
-    task.pattern, task.replace = rename_rules(season)
+    # 文件名里已经带季数（合集常见：…S03.EP07…）就沿用文件里的季，
+    # 否则统一按订阅名的季补前缀
+    keep_season = any(parse_season(n) for n in best.video_files)
+    task.pattern, task.replace = rename_rules(season, keep_season_in_name=keep_season)
     # 交给 QASx 任务默认配置；注意别写成 None —— null 会让 QASx 的 /update 直接 500
     task.addition = {}
 
-    new_desc = f"新增 {fmt_episodes(best.new_episodes)}（{len(best.new_episodes)} 集）"
+    new_desc = f"新增 {fmt_episode_keys(best.new_episodes)}（{len(best.new_episodes)} 集）"
     logger.info(f"订阅[{name}] 选中 {best.shareurl} {new_desc}")
 
     try:
@@ -383,7 +388,10 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
 
     cleaned = await _cleanup(client, task)
     result = parse_run_output(script_output)
-    lines = [result.render(fallback_savepath=savepath).strip(), f"　　{local_desc} → {new_desc}"]
+    head = result.render(fallback_savepath=savepath).strip()
+    # 「没有新文件」时不能再说「新增了哪些集」——那句预测和实际结果会互相打架
+    detail = local_desc if result.status == "no_new" else f"{local_desc} → {new_desc}"
+    lines = [head, f"　　{detail}"]
     if not cleaned:
         lines.append("　　⚠️ 任务未从 QAS 删除，请手动清理")
     return "\n".join(lines)

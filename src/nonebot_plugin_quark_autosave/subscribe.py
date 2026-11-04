@@ -42,6 +42,13 @@ GB = 1024**3
 #   把第 12 集重命名成 E4、E160 这种错名。
 TV_PATTERN = r".*?([Ss]\d{1,2})?(?:[第EePpXx\.\-\_\(\[]|\s){1,2}(\d{1,3})(?![\dA-Za-z]).*?\.(mp4|mkv)"
 
+# 文件名里已经带 season 的分享（合集里常见）用这个：强制捕获季数。
+# TV_PATTERN 的季数捕获是可选的，遇到「…2020.S03.EP07…」会先匹配到
+# 不带季的分支，结果只剩 E07——所以合集必须换这条。
+SEASON_TV_PATTERN = (
+    r".*?[Ss](\d{1,2})\s*[\.\-_ ]*\s*(?:[Ee][Pp]?)?\s*(\d{1,3})(?![\dA-Za-z]).*?\.(mp4|mkv)"
+)
+
 _CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
            "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
@@ -142,8 +149,16 @@ def split_season(taskname: str) -> tuple[str, int]:
     return name, 1
 
 
-def rename_rules(season: int) -> tuple[str, str]:
-    """建任务时随任务下发的重命名规则：统一成 S01E05 这种格式。"""
+def rename_rules(season: int, keep_season_in_name: bool = False) -> tuple[str, str]:
+    """建任务时随任务下发的重命名规则：统一成 S01E05 这种格式。
+
+    `keep_season_in_name=True` 用于**文件名里已经带季数**的分享
+    （「航拍中国第三季…S03.EP07…mp4」这种）：此时用捕获到的季数，
+    而不是订阅名里的季数。否则一个「1-4 季合集」里 S03/S04 的集
+    会被统一写成 S01Exx，互相撞名，本地「已有哪几集」也会算错。
+    """
+    if keep_season_in_name:
+        return SEASON_TV_PATTERN, r"S\1E\2.\3"
     return TV_PATTERN, f"S{season:02d}E\\2.\\3"
 
 
@@ -195,8 +210,46 @@ def video_names_from_dir(files: Iterable[dict]) -> list[str]:
     ]
 
 
+def parse_season(filename: str) -> int | None:
+    """文件名里带的季数：S03 / s3 / 第三季 / Season 3。没有就返回 None。"""
+    stem = filename.rsplit(".", 1)[0] if filename.count(".") >= 1 else filename
+    match = re.search(r"[Ss](\d{1,2})(?!\d)", stem)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"第\s*([0-9一二三四五六七八九十]+)\s*季|Season\s*(\d{1,2})", stem, re.IGNORECASE)
+    if match:
+        raw = match.group(1) or match.group(2)
+        return int(raw) if raw.isdigit() else _CN_NUM.get(raw, 1)
+    return None
+
+
 def episodes_of(names: Iterable[str]) -> set[int]:
     return {ep for name in names if (ep := parse_episode(name)) is not None}
+
+
+def episode_keys(names: Iterable[str], default_season: int = 1) -> set[tuple[int, int]]:
+    """集数按「(季, 集)」记，避免合集里 S03E01 被当成 S01E01。
+
+    文件名带季数就用文件名的，不带就用 default_season（订阅名里的季，
+    通常是 1）。
+    """
+    keys: set[tuple[int, int]] = set()
+    for name in names:
+        ep = parse_episode(name)
+        if ep is None:
+            continue
+        keys.add((parse_season(name) or default_season, ep))
+    return keys
+
+
+def _as_keys(items: Iterable, default_season: int = 1) -> set[tuple[int, int]]:
+    keys: set[tuple[int, int]] = set()
+    for item in items:
+        if isinstance(item, tuple):
+            keys.add((int(item[0]), int(item[1])))
+        else:
+            keys.add((default_season, int(item)))
+    return keys
 
 
 def fmt_episodes(eps: Iterable[int], limit: int = 8) -> str:
@@ -210,6 +263,20 @@ def fmt_episodes(eps: Iterable[int], limit: int = 8) -> str:
         return f"E{ordered[0]:02d}~E{ordered[-1]:02d}"
     shown = "、".join(f"E{e:02d}" for e in ordered[:limit])
     return shown + ("…" if len(ordered) > limit else "")
+
+
+def fmt_episode_keys(keys: Iterable[tuple[int, int]], limit: int = 8) -> str:
+    """{(1,1),(1,2),(3,5)} → "S01E01~E02、S03E05"；单季时省略季前缀。"""
+    keys = sorted(set(keys))
+    if not keys:
+        return "无"
+    seasons = {s for s, _ in keys}
+    parts = []
+    for s in sorted(seasons):
+        eps = [e for ss, e in keys if ss == s]
+        prefix = "" if len(seasons) == 1 else f"S{s:02d}"
+        parts.append(prefix + fmt_episodes(eps, limit))
+    return "、".join(parts)
 
 
 def episode_report(names: Iterable[str]) -> str:
@@ -235,7 +302,8 @@ class Candidate:
 
     shareurl: str
     video_files: list = field(default_factory=list)
-    new_episodes: set[int] = field(default_factory=set)
+    # (季, 集) 对；合集里 S03E01 和 S01E01 是两集，不能混
+    new_episodes: set = field(default_factory=set)
     size_ok: bool = False
     note: str = ""
 
@@ -254,12 +322,19 @@ def check_share(files, min_gb: float, max_gb: float) -> tuple[bool, str]:
     return True, f"全部 {len(videos)} 个视频都在 {min_gb}~{max_gb}G"
 
 
-def assess_share(shareurl: str, files, local_eps: set[int], min_gb: float, max_gb: float) -> Candidate:
-    """评估一个分享：大小是否合格 + 能补多少新集。"""
+def assess_share(
+    shareurl: str,
+    files,
+    local_eps,
+    min_gb: float,
+    max_gb: float,
+    season: int = 1,
+) -> Candidate:
+    """评估一个分享：大小是否合格 + 能补多少新集（按「季-集」比）。"""
     size_ok, note = check_share(files, min_gb, max_gb)
     names = video_names_from_share(files)
-    share_eps = episodes_of(names)
-    new_eps = share_eps - local_eps
+    share_keys = episode_keys(names, season)
+    new_eps = share_keys - _as_keys(local_eps, season)
     return Candidate(
         shareurl=shareurl,
         video_files=names,

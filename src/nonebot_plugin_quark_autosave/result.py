@@ -23,6 +23,9 @@ _TRAILING_CHARS = "，。、,;；:：!！?？)]}）】》>&"
 SUCCESS_MARK = "✅"
 FAILURE_MARKS = ("❌", "❗")
 SKIP_MARK = "任务不在执行周期内"
+# QASx 扫完保存目录/转存记录后判定「这次没有东西要转」，是正常结果，不是解析失败。
+# 订阅每天定时跑同一个 taskname 时几乎每次都会命中，报成「请检查登录态」属于误报。
+NO_NEW_MARKS = ("没有新的文件需要转存", "没有新的文件", "no new file")
 
 # QAS 明确表示分享/链接失效的措辞（见 quark_auto_save.py）
 EXPIRED_KEYWORDS = (
@@ -55,6 +58,10 @@ AUTH_ERROR_KEYWORDS = (
 PASSCODE_KEYWORDS = ("提取码", "密码", "passcode", "pwd=")
 
 TREE_PREFIXES = ("├──", "└──", "│──")
+# QAS 树里目录行的图标；目录不是「文件」，统计时剔除
+DIR_MARK = "📁"
+# 树里每个条目前面带图标（🎞️ / 📄 / 🖼️ / 📁），文件名要去掉它才算干净
+_EMOJI_PREFIX = re.compile(r"^[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u2B00-\u2BFF]+\s*")
 
 
 def extract_share_url(text: str) -> str | None:
@@ -107,7 +114,7 @@ def classify_error(err_msg: str) -> str:
 class RunResult:
     """一次转存执行的结果。"""
 
-    status: str = "unknown"  # success / partial / failed / skipped / unknown
+    status: str = "unknown"  # success / partial / failed / skipped / no_new / unknown
     files: list[str] = field(default_factory=list)
     savepath: str | None = None
     error: str | None = None
@@ -136,6 +143,8 @@ class RunResult:
             return f"❌ 转存失败：{self.error or '未知原因'}"
         elif self.status == "skipped":
             return "⏭ QAS 跳过了这次执行，请检查该任务的执行周期/进度设置"
+        elif self.status == "no_new":
+            return "✅ 已是最新，没有新文件需要转存"
         else:
             return "⚠️ 没解析到转存结果（QAS 既没报成功也没报失败），请去 QAS 日志确认。常见原因是夸克登录态失效"
 
@@ -165,9 +174,14 @@ def parse_run_output(chunks: Iterable[str]) -> RunResult:
             in_success_block = False
             failures.append(line.lstrip("".join(FAILURE_MARKS)).strip(" :《》"))
             continue
-        if line.startswith(TREE_PREFIXES):
-            name = line[3:].strip()
-            if name:
+        # 树的第二层起是 "│   ├── xxx"，先把左侧的竖线缩进剥掉再判断
+        branch = line.lstrip("│ \t")
+        if branch.startswith(TREE_PREFIXES):
+            raw_name = branch[3:].strip()
+            is_dir = raw_name.startswith(DIR_MARK)
+            name = _EMOJI_PREFIX.sub("", raw_name).strip()
+            # 目录不算「文件」，否则嵌套分享的「1 目录 + 2 文件」会报成 3 个文件
+            if name and not is_dir:
                 result.files.append(name)
             continue
         if in_success_block and line.startswith("/") and result.savepath is None:
@@ -186,4 +200,6 @@ def parse_run_output(chunks: Iterable[str]) -> RunResult:
         result.status = "success"
     elif SKIP_MARK in text:
         result.status = "skipped"
+    elif any(mark in text.lower() for mark in NO_NEW_MARKS):
+        result.status = "no_new"
     return result
