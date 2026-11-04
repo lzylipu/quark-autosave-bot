@@ -118,6 +118,16 @@ User sends a Quark link ──→ Extract URL (keeps ?pwd= and #/ subfolder)
 > binding live in `/app/data/subscriptions.json`. Without the volume, `docker rm` or
 > upgrading the image wipes them and you have to re-send `AD <title>` for every show.
 > If the startup log says "/app/data is not a mounted volume", that is exactly this.
+>
+> For a bind mount the host directory **must be owned by 1000:1000** (the container
+> runs as `appuser`), otherwise the file cannot be created and startup reports
+> `Permission denied`:
+>
+> ```bash
+> mkdir -p /volume1/docker/quarkbot/data
+> chown -R 1000:1000 /volume1/docker/quarkbot/data
+> # compose:  - /volume1/docker/quarkbot/data:/app/data
+> ```
 
 ```bash
 docker run -d \
@@ -308,6 +318,12 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 ---
 
 ## 📝 Changelog
+
+### v0.4.5
+
+- 🗂 `subscriptions.json` is created at startup (content `{}`) and the directory is checked for writability; previously the file only appeared on the first write, so a mounted-but-empty directory looked broken
+- 🚨 Wrong ownership / read-only mount now fails loudly at startup (log + Telegram) instead of surfacing on the first `AD`
+- 🧪 3 new unit tests (auto-create / keep existing / unwritable), 118 passed
 
 ### v0.4.4
 

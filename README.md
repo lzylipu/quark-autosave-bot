@@ -144,6 +144,15 @@ DL 甄嬛传        → 取消订阅
 > ⚠️ **必须挂 `/app/data` 卷**。订阅列表、TG 会话绑定都在 `/app/data/subscriptions.json`，
 > 不挂卷的话 `docker rm` / 升级镜像重建容器时**全部丢失**，只能重新 `AD 片名`。
 > 启动日志里如果看到「`/app/data` 没有挂载卷」，就是这个原因。
+>
+> 绑定宿主机目录时**属主必须是 1000:1000**（容器内跑的是 `appuser`），否则文件建不出来，
+> 启动会报 `Permission denied`：
+>
+> ```bash
+> mkdir -p /volume1/docker/quarkbot/data
+> chown -R 1000:1000 /volume1/docker/quarkbot/data
+> # compose 里写  - /volume1/docker/quarkbot/data:/app/data
+> ```
 
 ```bash
 docker run -d \
@@ -304,6 +313,12 @@ PYTHONPATH=src python3 tests/e2e/e2e_share_expand.py    # 真分享递归展开�
 ---
 
 ## 📝 更新日志
+
+### v0.4.5
+
+- 🗂 启动时主动创建 `subscriptions.json`（内容 `{}`）并检查目录可写：以前只有第一次写订阅才落文件，挂了卷看到空目录会以为没生效
+- 🚨 目录属主不对 / 只读挂载时启动就报错（日志 + TG），不用等某天发 `AD` 才发现存不上
+- 🧪 新增 3 个单测（自动创建 / 保留已有 / 不可写报错），共 118 passed
 
 ### v0.4.4
 

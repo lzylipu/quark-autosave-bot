@@ -243,6 +243,35 @@ class TestSubscriptionStore:
         store.path.write_text('{"甄嬛传": {"created', encoding="utf-8")
         assert SubscriptionStore(store.path).list_all() == ["甄嬛传"]
 
+    def test_ensure_ready_creates_missing_file(self, tmp_path):
+        """只挂目录不落文件是正常的；启动时主动建出来，别让人以为没生效。"""
+        store = SubscriptionStore(tmp_path / "subs.json")
+        assert not store.path.exists()
+        ok, msg = store.ensure_ready()
+        assert ok
+        assert store.path.exists()
+        assert json.loads(store.path.read_text(encoding="utf-8")) == {}
+        assert "已创建" in msg
+
+    def test_ensure_ready_keeps_existing(self, tmp_path):
+        store = SubscriptionStore(tmp_path / "subs.json")
+        store.add("甄嬛传")
+        ok, msg = store.ensure_ready()
+        assert ok and "已存在" in msg
+        assert store.list_all() == ["甄嬛传"]
+
+    def test_ensure_ready_reports_unwritable(self, tmp_path, monkeypatch):
+        """目录写不进去（属主不对 / 只读挂载）要在启动时就说，而不是等发 AD。"""
+        store = SubscriptionStore(tmp_path / "subs.json")
+
+        def boom(data):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(store, "save", boom)
+        ok, msg = store.ensure_ready()
+        assert ok is False
+        assert "/app/data" in msg or "写不进去" in msg
+
     def test_set_chat_id_returns_false_when_unwritable(self, tmp_path, monkeypatch):
         """目录不能写时不能抛异常把 AD 命令搞崩，只返回 False 让上层提示。"""
         store = SubscriptionStore(tmp_path / "subs.json")

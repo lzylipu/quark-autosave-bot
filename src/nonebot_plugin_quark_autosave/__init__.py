@@ -550,6 +550,15 @@ async def _run_all_subscriptions() -> None:
 async def _start_subscription_scheduler() -> None:
     import asyncio
 
+    # 先把文件建出来：光挂卷不落文件是正常的（订阅文件第一次写才创建），
+    # 但目录属主不对 / 只读挂载必须当场报出来，别等用户发 AD 才发现存不上
+    ready, msg = store.ensure_ready()
+    if ready:
+        logger.info(msg)
+    else:
+        logger.error(msg)
+        await _report(msg)
+
     names = store.list_all()
     logger.info(
         f"订阅文件: {store.path}（{len(names)} 个订阅）"

@@ -120,6 +120,25 @@ class SubscriptionStore:
                 logger.warning(f"订阅备份没写成（不影响本次保存）: {exc}")
         os.replace(tmp, self.path)
 
+    def ensure_ready(self) -> tuple[bool, str]:
+        """启动时把订阅文件先建出来，并确认这个目录真能写。
+
+        空目录不等于坏：订阅文件是「第一次写的时候才创建」的，所以光挂卷不落文件
+        是正常的。但目录属主不对 / 只读挂载时，用户要等到某天发 AD 才发现存不上，
+        这里提前把 {} 写一遍，写不进去当场报出来。
+        """
+        if self.path.exists():
+            try:
+                json.loads(self.path.read_text(encoding="utf-8"))
+            except Exception:
+                pass  # 坏了也没关系，load() 会回退到 .bak
+            if not os.access(self.path, os.W_OK):
+                return False, _save_failed_msg(self.path)
+            return True, f"订阅文件已存在: {self.path}"
+        if not self._save_or_explain({}):
+            return False, _save_failed_msg(self.path)
+        return True, f"订阅文件已创建: {self.path}"
+
     def _save_or_explain(self, data: dict[str, dict]) -> bool:
         """写盘失败时只记日志、返回 False，交给调用方给出人话提示。"""
         try:
@@ -477,9 +496,9 @@ def seconds_until(hhmm: str, now: datetime | None = None) -> float:
 def _save_failed_msg(path: str | Path) -> str:
     return (
         f"❌ 订阅没存下来（{path} 写不进去）\n"
-        "　　容器里这个目录不可写，或者根本没挂卷——升级/重建容器后订阅会全丢。\n"
-        "　　compose 里加：volumes: - bot-data:/app/data\n"
-        "　　docker run 加：-v quarkbot-data:/app/data"
+        "　　容器内进程是 appuser（uid 1000），宿主机上的目录属主不是它就会 Permission denied。\n"
+        "　　修法（宿主机执行）：chown -R 1000:1000 <你挂的那个目录>\n"
+        "　　如果压根没挂卷：docker run 加 -v quarkbot-data:/app/data"
     )
 
 
