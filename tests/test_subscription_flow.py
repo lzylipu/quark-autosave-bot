@@ -249,7 +249,7 @@ async def test_flow_explicit_season_reports_no_season_match():
     report = await plugin._run_one_subscription(client, "某剧 S05")
 
     assert client.added == []
-    assert "最新" in report or "没有新集" in report
+    assert "别的季" in report and "第 5 季" in report
 
 
 async def test_flow_scans_every_share_before_picking():
@@ -312,11 +312,92 @@ async def test_flow_keeps_scanning_when_share_has_no_new_episodes():
 
 
 async def test_flow_counts_only_episodes_the_pattern_will_transfer():
-    """合集里混排「S02E04」和「E01」时，只能把真会转存的那几集算成新增。
+    """带季的分享里只下目标季，别的季不碰、也不算进「新增几集」。
 
-    真机：法警小队 选中一个 20 个视频的分享，报「新增 S01E01~E13、S02E04~E05（15 集）」，
-    实际落盘只有 3 个——因为命名规则要求文件名带季数，E01 这种被 QASx 直接跳过。
+    真机：法警小队 选中一个混排分享，报「新增 15 集」，实际落盘只有 3 个。
     """
+    share_files = [_file(f"Marshals.S01E{i:02d}.1080p.mkv", 4.6) for i in range(1, 6)]
+    share_files += [
+        _file("Marshals.S02E04.2160p.mkv", 4.35),
+        _file("Marshals.S02E05.2160p.mkv", 7.52),
+    ]
+    client = FakeClient([], [{"shareurl": "u1"}], {"u1": _detail(*share_files)})
+
+    report = await plugin._run_one_subscription(client, "法警小队")
+
+    assert len(client.added) == 1
+    assert "新增 E01~E05（5 集）" in report
+    assert "S02" not in report  # 第二季不参与
+    assert client.added[0].replace == "S01E\\1.\\2"
+
+
+async def test_flow_skips_share_missing_a_pending_episode():
+    """本地 E01~E10、该补 E11+E12：只有 E12 的链接必须跳过，选 E11+E12 的那条。
+
+    用户原话：「他只有个 12，他没有 11……你这样再去下，他就错过了，所以这条链接忽略掉」。
+    """
+    local = [{"file_name": f"S01E{i:02d}.mkv", "dir": False} for i in range(1, 11)]
+    only12 = [_file("甄嬛传.S01E12.mkv", 2)]
+    both = [_file("甄嬛传.S01E11.mkv", 2), _file("甄嬛传.S01E12.mkv", 2)]
+    client = FakeClient(
+        local,
+        [{"shareurl": "partial"}, {"shareurl": "full"}],
+        {"partial": _detail(*only12), "full": _detail(*both)},
+    )
+
+    report = await plugin._run_one_subscription(client, "甄嬛传")
+
+    assert client.added and client.added[0].shareurl == "full"
+    assert "E11~E12" in report
+
+
+async def test_flow_reports_missing_when_no_share_covers_everything():
+    """一个能补全的链接都没有时，仍然下，但必须写明这条缺哪几集。"""
+    local = [{"file_name": f"S01E{i:02d}.mkv", "dir": False} for i in range(1, 11)]
+    only12 = [_file("甄嬛传.S01E12.mkv", 2)]
+    client = FakeClient(
+        local, [{"shareurl": "partial"}], {"partial": _detail(*only12)}
+    )
+
+    report = await plugin._run_one_subscription(client, "甄嬛传")
+
+    assert len(client.added) == 1
+    assert "缺 E11" in report
+
+
+async def test_flow_fills_gap_when_local_is_missing_middle_episodes():
+    """本地被手动删掉两集时，优先挑全集分享把那两集补回来。
+
+    用户实测「有个电视剧缺两集」：只收更新包的话，中间缺的永远补不上。
+    """
+    local = [{"file_name": f"S01E{i:02d}.mkv", "dir": False} for i in (1, 2, 3, 4, 5, 8)]
+    update = [_file(f"某剧.S01E{i:02d}.mkv", 2) for i in (9, 10, 11, 12)]
+    full = [_file(f"某剧.S01E{i:02d}.mkv", 2) for i in range(1, 13)]
+    client = FakeClient(
+        local,
+        [{"shareurl": "update"}, {"shareurl": "full"}],
+        {"update": _detail(*update), "full": _detail(*full)},
+    )
+
+    report = await plugin._run_one_subscription(client, "某剧")
+
+    assert client.added and client.added[0].shareurl == "full"
+    assert "E06" in report  # 缺的中间集一起补
+
+
+async def test_flow_locks_first_season_when_name_has_no_season():
+    """订阅名没写季就只下第一季，不会把第二季的集当成本季缺集。"""
+    share_files = [_file(f"某美剧.S02E{i:02d}.mkv", 2) for i in range(1, 4)]
+    client = FakeClient([], [{"shareurl": "u1"}], {"u1": _detail(*share_files)})
+
+    report = await plugin._run_one_subscription(client, "某美剧")
+
+    assert client.added == []
+    assert "别的季" in report  # 是第二季的分享，没写季就当第一季，不下
+
+
+async def test_flow_refuses_share_when_pattern_matches_nothing():
+    """分享里全是裸 E01 且混了别的季时，不猜归属：一个都匹配不上就不建任务。"""
     share_files = [
         _file("Marshals.S02E04.2160p.mkv", 4.35),
         _file("Marshals.S02E05.2160p.mkv", 7.52),
@@ -325,9 +406,8 @@ async def test_flow_counts_only_episodes_the_pattern_will_transfer():
 
     report = await plugin._run_one_subscription(client, "法警小队")
 
-    assert len(client.added) == 1
-    assert "新增 E04~E05（2 集）" in report
-    assert "另有 13 集" in report
+    assert client.added == []
+    assert "别的季" in report  # 带季的只有第二季，裸 E01 不猜归属
 
 
 async def test_run_all_survives_unwritable_store(tmp_path, monkeypatch):

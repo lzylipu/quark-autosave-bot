@@ -405,6 +405,9 @@ class Candidate:
     median_gb: float = 0.0
     # 文件名里出现了订阅的片名（排除盘搜混进来的别的剧）
     title_hit: bool = False
+    # 这条分享「本该有却没给」的集：本地已有 E01~E10、分享里只有 E12，
+    # 那 E11 就是 missing —— 缺集的更新包不能选中，否则 E11 永久跳过
+    missing: set = field(default_factory=set)
 
 
 def video_median_gb(files) -> float:
@@ -440,6 +443,27 @@ def check_share(files, min_gb: float, max_gb: float) -> tuple[bool, str]:
     return True, f"全部 {len(videos)} 个视频都在 {min_gb}~{max_gb}G"
 
 
+def missing_episodes(share_keys, local_keys) -> set:
+    """分享里「本该有却没给」的集。
+
+    判定依据：从 E01 到分享里最大集，凡是本地没有的集，分享都得给。
+    本地 E01~E10、分享只有 E12 → 缺 E11；本地少了 E06/E07 → 那两个也算缺。
+    这样「只有第 12 集」的更新包不会被当成能补全的链接，会继续看下一条；
+    本地被手动删掉的集也会优先挑全集分享补回来。
+    """
+    share_keys = set(share_keys)
+    local_keys = set(local_keys)
+    gap: set = set()
+    for season in {s for s, _ in share_keys}:
+        eps = {e for s, e in share_keys if s == season}
+        gap |= {
+            (season, e)
+            for e in range(1, max(eps) + 1)
+            if e not in eps and (season, e) not in local_keys
+        }
+    return gap
+
+
 def assess_share(
     shareurl: str,
     files,
@@ -454,7 +478,8 @@ def assess_share(
     size_ok, note = check_share(files, min_gb, max_gb)
     names = video_names_from_share(files)
     share_keys = episode_keys(names, season)
-    new_eps = share_keys - _as_keys(local_eps, season)
+    local_keys = _as_keys(local_eps, season)
+    new_eps = share_keys - local_keys
     # 片名要对得上才算「这部剧」：盘搜会混进同档期别的剧，只按大小筛会下错内容
     # （真机：尚公主 选中过 7.85G 的「黄金时段 / Primetime」）。
     # 文件名常被改成 24.4K-S.mp4 这种，所以搜索结果的标题也算一次匹配。
@@ -469,6 +494,7 @@ def assess_share(
         note=note,
         median_gb=video_median_gb(files),
         title_hit=hit,
+        missing=missing_episodes(share_keys, local_keys),
     )
 
 
@@ -483,7 +509,9 @@ def pick_best(
     ]
     if not usable:
         return None
-    return max(usable, key=lambda c: len(c.new_episodes))
+    # 整份覆盖优先：缺集的分享会把漏掉的那几集永久跳过（实测「只有 E12」的
+    # 更新包被选中，E11 再也没补上）。同档再比能补多少集，最后取先搜到的。
+    return max(usable, key=lambda c: (not c.missing, len(c.new_episodes)))
 
 
 def seconds_until(hhmm: str, now: datetime | None = None) -> float:

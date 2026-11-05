@@ -28,7 +28,6 @@ from .subscribe import (
     assess_share,
     episode_keys,
     fmt_episode_keys,
-    has_explicit_season,
     parse_season,
     pick_best,
     persistence_warning,
@@ -329,14 +328,17 @@ def _only_season(cand: Candidate, season: int, enabled: bool) -> Candidate:
     """
     if enabled:
         cand.new_episodes = {key for key in cand.new_episodes if key[0] == season}
+        cand.missing = {key for key in cand.missing if key[0] == season}
     return cand
 
 
 async def _run_one_subscription(client: QASClient, name: str) -> str:
-    """跑一个订阅：扫本地 → 搜索 → 筛大小 → 选能补最多的 → 转存 → 删任务。"""
+    """跑一个订阅：扫本地 → 搜索 → 找能把缺集补全的那条分享 → 转存 → 删任务。"""
     title, season = split_season(name)
-    # 订阅名写死了季（「黑镜 S05」）就只下这一季，否则会把别的季当成本季缺集
-    only_season = has_explicit_season(name)
+    # 一律只下这一季：订阅名写死了季（「黑镜 S05」）就下那一季，没写就当第一季。
+    # 原来「没写季就不锁季」，于是美剧 S01/S02/S03 的集混在一起算缺集，
+    # 最后挑中一季第 10 集就下了（实测两次都下错季）。要第二季写「S02」。
+    only_season = True
     savepath = f"/{plugin_config.simple_save_root}/{sanitize_title(title)}"
 
     # 1. 本地已有哪几集
@@ -361,7 +363,7 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
     limit = plugin_config.sub_max_candidates
     max_ok = plugin_config.sub_max_ok_candidates
     pending = results if limit <= 0 else results[:limit]
-    checked = failed = empty = 0
+    checked = failed = empty = off_season = 0
     candidates: list[Candidate] = []
 
     async def _probe(idx: int, item: dict) -> tuple[int, Candidate | None, str]:
@@ -375,6 +377,18 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
             # 链接失效是常态，换下一个
             logger.info(f"订阅[{name}] 跳过分享 {shareurl}: {exc}")
             return idx, None, str(exc)
+        # 分享里带季标记、但没有一集属于目标季 → 直接跳过，去看下一条。
+        # 不能选中它：pattern 只认目标季，选中也一集都转不了，白建一轮任务。
+        marks = {
+            parse_season(f.file_name)
+            for f in files
+            if not getattr(f, "dir", False)
+        }
+        marks.discard(None)
+        if marks and season not in marks:
+            logger.info(f"订阅[{name}] 跳过分享 {shareurl}: 是第 {sorted(marks)} 季")
+            return idx, None, f"季:{sorted(m for m in marks if m)}"
+
         cand = _only_season(
             assess_share(
                 shareurl,
@@ -401,18 +415,28 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
         for _idx, cand, err in sorted(probed, key=lambda x: x[0]):
             if err or cand is None:
                 if err:
-                    failed += 1
+                    if err.startswith("季:"):
+                        off_season += 1
+                    else:
+                        failed += 1
                 continue
             checked += 1
             if not cand.video_files:
                 empty += 1
                 continue
             candidates.append(cand)
-        usable = [c for c in candidates if c.title_hit and c.size_ok and c.new_episodes]
+        # 合格 = 片名对得上 + 大小在区间 + 有可补的集 + 这几集它全都给了。
+        # 少一集就算不合格：本地 E01~E10、分享只有 E12 时，选中它 E11 就永久跳过
+        # （用户实测的原话：「那 11 就有，没有 11 你这样再去下，他就错过了」）。
+        usable = [
+            c
+            for c in candidates
+            if c.title_hit and c.size_ok and c.new_episodes and not c.missing
+        ]
         if max_ok > 0 and len(usable) >= max_ok:
             logger.info(
                 f"订阅[{name}] 找到 {len(usable)} 个合格分享"
-                f"（片名对得上 + 大小在区间 + 有可补的集），"
+                f"（片名对得上 + 大小在区间 + 缺的集它全有），"
                 f"共探 {checked} 个，停止继续扫描"
             )
             break
@@ -436,9 +460,13 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
         best = pick_best(relaxed, require_size_ok=False)
         fallback = best is not None
     if best is None:
-        stats = f"检查了 {checked} 个分享（{failed} 个链接失效、{empty} 个没有视频文件）"
+        stats = f"检查了 {checked} 个分享（{failed} 个链接失效、{empty} 个没有视频文件"
+        if off_season:
+            stats += f"、{off_season} 个是别的季"
+        stats += "）"
         if not candidates:
-            return f"❌ {stats}，没有可用资源\n　　{local_desc}"
+            hint = f"，没有第 {season} 季的资源" if off_season else "，没有可用资源"
+            return f"❌ {stats}{hint}\n　　{local_desc}"
         if not any(c.size_ok for c in pool):
             medians = sorted(round(c.median_gb, 2) for c in candidates if c.median_gb)
             span = f"，实测每集中位数 {medians[0]}~{medians[-1]}G" if medians else ""
@@ -454,21 +482,27 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
     task = TaskItem.simple_from_title(title, best.shareurl)
     task.taskname = sanitize_title(title)
     task.savepath = savepath
-    # 文件名里已经带季数（合集常见：…S03.EP07…）就沿用文件里的季，
-    # 否则统一按订阅名的季补前缀
+    # 分享里只要出现了季标记，就只认目标季：别季的文件一律不碰，没标季的也不碰
+    # （裸 E01.mkv 归哪一季无法确定，猜错就是下错季）。全是裸文件名时才算本季。
     keep_season = any(parse_season(n) for n in best.video_files)
-    if only_season and keep_season:
-        # 写死了季 + 文件名带季：pattern 同时当筛选用，只转存这一季
+    if keep_season:
         task.pattern, task.replace = season_rename_rules(season)
     else:
-        task.pattern, task.replace = rename_rules(season, keep_season_in_name=keep_season)
+        task.pattern, task.replace = rename_rules(season, keep_season_in_name=False)
     # pattern 同时是 QASx 的筛选条件：匹配不上文件名不转存。所以「新增几集」
     # 只能算真正会被转存的那几集——合集里既有 S02E05 又有 E01 时，E01 会被跳过
     # （真机：法警小队 报「新增 15 集」，落盘只有 3 个）。
     # 预算不出来时（文件名写法比本地正则更野）不能拦，交给 QASx 自己判断。
     transferable = [n for n in best.video_files if re.search(task.pattern, n)]
+    if not transferable:
+        # 命名规则一个都匹配不上就真的下不了任何东西，别建任务白跑一轮
+        return (
+            f"❌ 选中的分享（{best.shareurl}）文件名和命名规则对不上，本轮跳过\n"
+            f"　　{local_desc}\n"
+            f"　　（分享里 {len(best.video_files)} 个视频，没有一个是第 {season} 季的命名）"
+        )
     transfer_keys = best.new_episodes & episode_keys(transferable, season)
-    dropped = best.new_episodes - transfer_keys if transfer_keys else set()
+    dropped = best.new_episodes - transfer_keys
     if not transfer_keys:
         transfer_keys = best.new_episodes
     # 交给 QASx 任务默认配置；注意别写成 None —— null 会让 QASx 的 /update 直接 500
@@ -499,6 +533,11 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
         lines.append(
             f"　　⚠️ 没有 {plugin_config.sub_min_size_gb}~{plugin_config.sub_max_size_gb}G 的分享，"
             f"改用每集约 {best.median_gb:.2f}G 的（正片偏小，画质可能一般）"
+        )
+    if best.missing:
+        lines.append(
+            f"　　⚠️ 没找到能补全的链接，这条缺 {fmt_episode_keys(best.missing)}"
+            f"（{len(best.missing)} 集），缺的下轮再补"
         )
     if dropped:
         lines.append(

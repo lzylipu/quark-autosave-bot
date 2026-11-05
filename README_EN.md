@@ -321,6 +321,15 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 
 ## 📝 Changelog
 
+### v0.5.0
+
+- 🎯 **A share must contain every pending episode**: local E01~E10 needing E11+E12 — a share with only E12 is skipped, scanning continues for one with both. Previously any single new episode triggered a download and the missing one was lost forever
+- 🕳 **Episodes deleted by hand also count as pending**: a full-set share is preferred so gaps like E06/E07 get filled instead of only the newest update pack
+- ⚠️ When no share covers everything, it still downloads but reports exactly what is missing ("this share lacks E11"), instead of pretending success
+- 🔒 **No season written = season 1 only**: US shows no longer mix S01/S02/S03 into one pending set (which used to download S01E10 when S02 was wanted). Write `AD Show S02` for season 2
+- 🚫 A share whose season markers never match the target season is skipped, not guessed
+- 🧪 5 new unit tests, 126 passed
+
 ### v0.4.7
 
 - 🎞 **Not just mp4/mkv anymore**: `avi`/`ts`/`rmvb`/`mov`/`m2ts` episodes are transferred too (the pattern used to filter them out, so those episodes could never be filled in)
