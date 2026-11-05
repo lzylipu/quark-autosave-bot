@@ -30,6 +30,9 @@ class Config(BaseModel):
     sub_max_ok_candidates: int = 1
     # 全部都不在区间内时退一档：每集中位数 >= 这个值就当正片下（0.5G 挡枪版）
     sub_fallback_min_size_gb: float = 0.5
+    # 一条分享跑完一个文件都没落下（QASx 的 transfer_records 里已经有这批文件，
+    # 目录里却空着）时，换下一条再试，最多试几条
+    sub_transfer_attempts: int = 3
     # 订阅列表存放路径
     sub_store_file: str = "data/subscriptions.json"
 

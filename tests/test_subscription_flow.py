@@ -1,6 +1,7 @@
 """订阅执行编排：用假 client 跑通「扫本地 → 搜索 → 筛选 → 建任务 → 删任务」。"""
 
 import re
+from typing import Any
 
 import nonebot_plugin_quark_autosave as plugin
 from nonebot_plugin_quark_autosave.model import DetailInfo, FileItem
@@ -20,11 +21,19 @@ def _file(name: str, size: float) -> FileItem:
 
 
 class FakeClient:
-    def __init__(self, local, results, details, output=None):
+    def __init__(
+        self, local, results, details, output=None, land: Any = "all", records=None
+    ):
         self.local = local
         self.results = results
         self.details = details
         self.output = output or ["✅《甄嬛传》新增文件:\n/自动/甄嬛传\n├── S01E10.mkv"]
+        # 转存后真正落盘哪些文件：'all' = 该分享里命名规则命中的全落；
+        # 'none' = 一个都不落（复现 QASx 按 file_id + 任务名去重把整轮挡掉）；
+        # 一组子串 = 只有文件名含这些子串的落下。
+        self.land = land
+        self.records = records or []
+        self.cleared_records = []
         self.added = []
         self.deleted = []
         # 探过详情的分享：早停测试要数「到底探了几个」
@@ -44,11 +53,33 @@ class FakeClient:
         self.probed.append(shareurl)
         return list(self.details[shareurl].file_list)
 
+    async def history_records(self, task_name, page_size=100):
+        return list(self.records)
+
+    async def delete_history_records(self, record_ids):
+        self.cleared_records.extend(record_ids)
+        return len(record_ids)
+
     async def add_task(self, task):
         self.added.append(task)
         return task
 
     async def run_script(self, task):
+        spec = self.land
+        if isinstance(spec, dict):
+            spec = spec.get(task.shareurl, "all")
+        if spec:
+            names = [f.file_name for f in self.details[task.shareurl].file_list]
+            if spec != "all":
+                names = [n for n in names if any(k in n for k in spec)]
+            for name in names:
+                if re.search(task.pattern, name):
+                    self.local.append(
+                        {
+                            "file_name": re.sub(task.pattern, task.replace, name),
+                            "dir": False,
+                        }
+                    )
         for chunk in self.output:
             yield chunk
 
@@ -411,6 +442,107 @@ async def test_flow_refuses_share_when_pattern_matches_nothing():
 
     assert client.added == []
     assert "别的季" in report  # 带季的只有第二季，裸 E01 不猜归属
+
+
+async def test_flow_retries_next_share_when_nothing_lands():
+    """真机 bug：走马上任的 11 集早就在 QASx 的 transfer_records 里（file_id + 任务名），
+    同名片子再建任务只会回「没有新的文件需要转存」，一个都不落 → 必须换下一条分享。
+
+    A/B 实测：taskname 换成别的 → 13 个文件全落盘；只换 savepath → 仍 0 个。
+    """
+    dead = [_file(f"走马上任.E{i:02d}.mkv", 2.5) for i in range(1, 6)]
+    alive = [_file(f"走马上任.{i:02d}.mkv", 2.5) for i in range(1, 6)]
+    client = FakeClient(
+        [],
+        [{"shareurl": "dead"}, {"shareurl": "alive"}],
+        {"dead": _detail(*dead), "alive": _detail(*alive)},
+        land={"dead": "none"},
+    )
+
+    report = await plugin._run_one_subscription(client, "走马上任")
+
+    assert [t.shareurl for t in client.added] == ["dead", "alive"]
+    assert "前面 1 条分享没落下文件" in report
+    assert "E01~E05" in report
+    # 试过的任务都要删干净，不能留在 QAS 里
+    assert [t.shareurl for t in client.deleted] == ["dead", "alive"]
+
+
+async def test_flow_reports_failure_when_no_share_lands_anything():
+    """全都落 0 个时不许假装成功，要写明是转存记录挡住的。"""
+    files = [_file(f"走马上任.E{i:02d}.mkv", 2.5) for i in range(1, 6)]
+    client = FakeClient(
+        [],
+        [{"shareurl": "a"}, {"shareurl": "b"}],
+        {"a": _detail(*files), "b": _detail(*files)},
+        land="none",
+    )
+
+    report = await plugin._run_one_subscription(client, "走马上任")
+
+    assert len(client.added) == 2
+    assert "试了 2 条分享，一个文件都没落下" in report
+    assert "转存记录" in report
+
+
+async def test_flow_warns_about_duplicate_episode_files():
+    """真机：走马上任 的分享里 07.mkv 和 S01E07.mkv 是同一集，QASx 认不出，各落一份。
+
+    落盘就成了 S01E07.mkv + 07.mkv（改名撞名保留原名），命名不统一。只提示，不弃用。
+    """
+    files = [_file(f"走马上任.S01E{i:02d}.mkv", 2.5) for i in range(1, 8)]
+    files += [_file("07.mkv", 2.9)]  # 同一集的第二份
+    client = FakeClient([], [{"shareurl": "u1"}], {"u1": _detail(*files)})
+
+    report = await plugin._run_one_subscription(client, "走马上任")
+
+    assert "各有两份文件" in report
+    assert "E07" in report
+
+
+async def test_flow_clears_stale_records_for_missing_episodes():
+    """真机：走马上任 11 集全在 QASx 转存记录里，目录却是空的，于是永远「没有新文件」。
+
+    记录说转过、目录里却没有 = 记录过期，先清掉这几条才能重下。
+    """
+    share_files = [_file(f"走马上任.S01E{i:02d}.mkv", 2.5) for i in range(1, 4)]
+    records = [
+        {"id": 11, "task_name": "走马上任", "save_path": "/自动/走马上任",
+         "renamed_to": "S01E01.mkv"},
+        {"id": 12, "task_name": "走马上任", "save_path": "/自动/走马上任",
+         "renamed_to": "S01E02.mkv"},
+        # 别的目录的记录不归这次管
+        {"id": 13, "task_name": "走马上任", "save_path": "/别处/走马上任",
+         "renamed_to": "S01E03.mkv"},
+        # 别的季的记录也不能删
+        {"id": 14, "task_name": "走马上任", "save_path": "/自动/走马上任",
+         "renamed_to": "S02E03.mkv"},
+    ]
+    client = FakeClient(
+        [], [{"shareurl": "u1"}], {"u1": _detail(*share_files)}, records=records
+    )
+
+    report = await plugin._run_one_subscription(client, "走马上任")
+
+    assert client.cleared_records == [11, 12]
+    assert "清掉 2 条过期转存记录" in report
+
+
+async def test_flow_keeps_records_when_file_is_still_there():
+    """目录里那集还在 → 记录有效，不许删。"""
+    local = [{"file_name": "S01E01.mkv", "dir": False}]
+    share_files = [_file(f"走马上任.S01E{i:02d}.mkv", 2.5) for i in range(1, 4)]
+    records = [
+        {"id": 21, "task_name": "走马上任", "save_path": "/自动/走马上任",
+         "renamed_to": "S01E01.mkv"},
+    ]
+    client = FakeClient(
+        local, [{"shareurl": "u1"}], {"u1": _detail(*share_files)}, records=records
+    )
+
+    await plugin._run_one_subscription(client, "走马上任")
+
+    assert client.cleared_records == []
 
 
 async def test_run_all_survives_unwritable_store(tmp_path, monkeypatch):

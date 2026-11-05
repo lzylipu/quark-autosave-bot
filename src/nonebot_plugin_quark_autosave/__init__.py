@@ -370,6 +370,49 @@ def _only_season(cand: Candidate, season: int, enabled: bool) -> Candidate:
     return cand
 
 
+async def _clear_stale_records(
+    client: QASClient, taskname: str, savepath: str, local_keys: set, season: int
+) -> int:
+    """清掉「记录说有、目录里却没有」的转存记录，返回清掉的条数。
+
+    QASx 按 `file_id + 任务名` 去重：云盘里的文件被删了、记录还留着，同一个任务名
+    就永远转不进来（真机：走马上任 11 集全在记录里，`/自动/走马上任` 却是空的，
+    每次跑都回「没有新的文件需要转存」）。这里只删同时满足三条的记录：
+    ① 任务名就是这次要用的 ② 保存目录就是这次的 ③ 这一集本地确实没有了。
+    别的任务、别的目录、别的季的记录一律不碰。
+    """
+    try:
+        records = await client.history_records(taskname)
+    except Exception as exc:  # noqa: BLE001 — 记录读不到不该挡住转存
+        logger.warning(f"读转存记录失败（跳过清理）: {exc}")
+        return 0
+
+    want = savepath.strip("/")
+    stale: list[int] = []
+    for record in records:
+        if str(record.get("save_path") or "").strip("/") != want:
+            continue
+        name = record.get("renamed_to") or record.get("original_name") or ""
+        keys = episode_keys([str(name)], season)
+        if not keys or not any(key[0] == season for key in keys):
+            continue  # 别的季的记录不归这次管
+        if keys & local_keys:
+            continue  # 这一集还在目录里，记录是有效的
+        rid = record.get("id")
+        if rid is not None:
+            stale.append(rid)
+
+    if not stale:
+        return 0
+    cleared = await client.delete_history_records(stale)
+    if cleared:
+        logger.info(
+            f"清掉 {cleared} 条过期转存记录（{taskname} / {savepath}）："
+            f"这些集本地已经没有了，不清就永远转不进来"
+        )
+    return cleared
+
+
 async def _run_one_subscription(client: QASClient, name: str) -> str:
     """跑一个订阅：扫本地 → 搜索 → 找能把缺集补全的那条分享 → 转存 → 删任务。"""
     title, season = split_season(name)
@@ -383,6 +426,11 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
     local_files = await client.list_savepath_files(savepath)
     local_keys = episode_keys(video_names_from_dir(local_files), season)
     local_desc = f"本地已有 {fmt_episode_keys(local_keys)}" if local_keys else "本地还没有剧集"
+
+    # 1.5 记录的集本地却没有：这条记录挡住重下，先清掉（只清同名同目录同季的）
+    cleared = await _clear_stale_records(
+        client, sanitize_title(title), savepath, local_keys, season
+    )
 
     # 2. 搜资源
     try:
@@ -443,60 +491,85 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
         )
         return idx, cand, ""
 
-    for start in range(0, len(pending), _PROBE_CONCURRENCY):
-        batch = pending[start : start + _PROBE_CONCURRENCY]
-        # 一条一条串行的话，热门剧 170 多条要跑好几分钟；这里只并发一批，
-        # 探到合格的就停，不把剩下的全探完（用户明确要求：扫到就停，别复盘全表）
-        probed = await asyncio.gather(
-            *(_probe(start + i, item) for i, item in enumerate(batch))
-        )
-        for _idx, cand, err in sorted(probed, key=lambda x: x[0]):
-            if err or cand is None:
-                if err:
-                    if err.startswith("季:"):
-                        off_season += 1
-                    else:
-                        failed += 1
-                continue
-            checked += 1
-            if not cand.video_files:
-                empty += 1
-                continue
-            candidates.append(cand)
-        # 合格 = 片名对得上 + 大小在区间 + 有可补的集 + 这几集它全都给了。
-        # 少一集就算不合格：本地 E01~E10、分享只有 E12 时，选中它 E11 就永久跳过
-        # （用户实测的原话：「那 11 就有，没有 11 你这样再去下，他就错过了」）。
-        usable = [
-            c
-            for c in candidates
-            if c.title_hit and c.size_ok and c.new_episodes and not c.missing
-        ]
-        if max_ok > 0 and len(usable) >= max_ok:
-            logger.info(
-                f"订阅[{name}] 找到 {len(usable)} 个合格分享"
-                f"（片名对得上 + 大小在区间 + 缺的集它全有），"
-                f"共探 {checked} 个，停止继续扫描"
+    scan_pos = 0
+
+    async def _scan_batches() -> None:
+        """往后探分享，探到合格的就停；可续扫（这条试过不落文件，接着往后看）。"""
+        nonlocal scan_pos, checked, failed, empty, off_season
+        while scan_pos < len(pending):
+            batch = pending[scan_pos : scan_pos + _PROBE_CONCURRENCY]
+            start = scan_pos
+            scan_pos += len(batch)
+            # 一条一条串行的话，热门剧 170 多条要跑好几分钟；这里只并发一批，
+            # 探到合格的就停，不把剩下的全探完（用户明确要求：扫到就停，别复盘全表）
+            probed = await asyncio.gather(
+                *(_probe(start + i, item) for i, item in enumerate(batch))
             )
-            break
+            for _idx, cand, err in sorted(probed, key=lambda x: x[0]):
+                if err or cand is None:
+                    if err:
+                        if err.startswith("季:"):
+                            off_season += 1
+                        else:
+                            failed += 1
+                    continue
+                checked += 1
+                if not cand.video_files:
+                    empty += 1
+                    continue
+                candidates.append(cand)
+            # 合格 = 片名对得上 + 大小在区间 + 有可补的集 + 这几集它全都给了。
+            # 少一集就算不合格：本地 E01~E10、分享只有 E12 时，选中它 E11 就永久跳过
+            # （用户实测的原话：「那 11 就有，没有 11 你这样再去下，他就错过了」）。
+            usable = [
+                c
+                for c in candidates
+                if c.title_hit and c.size_ok and c.new_episodes and not c.missing
+            ]
+            if max_ok > 0 and len(usable) >= max_ok:
+                logger.info(
+                    f"订阅[{name}] 找到 {len(usable)} 个合格分享"
+                    f"（片名对得上 + 大小在区间 + 缺的集它全有），"
+                    f"共探 {checked} 个，停止继续扫描"
+                )
+                return
 
-    # 先只看「文件名里确实带这部剧片名」的分享，盘搜混进来的别的剧不参与竞争；
-    # 一个都没带片名时（文件名用英文/缩写）退回全体，避免全军覆没。
-    pool = [c for c in candidates if c.title_hit] or candidates
+    def _pool() -> list[Candidate]:
+        """先只看「文件名里确实带这部剧片名」的分享，盘搜混进来的别的剧不参与竞争；
+        一个都没带片名时（文件名用英文/缩写）退回全体，避免全军覆没。"""
+        return [c for c in candidates if c.title_hit] or candidates
 
-    best = pick_best(pool)
-    fallback = False
-    if best is None:
+    def _select(skip: set[str]) -> tuple[Candidate | None, bool]:
+        """从候选池挑一条（跳过已经跑过的），返回（候选, 是否退档）。"""
+        left = [c for c in _pool() if c.shareurl not in skip]
+        pick = pick_best(left)
+        if pick is not None:
+            return pick, False
         # 没有落在 1.5~8G 的：退一档用「每集中位数 >= sub_fallback_min_size_gb」的。
         # 有些剧 4K 压得小（尚公主每集 1.15~1.4G），卡死下限就一集都下不来。
         relaxed = [
             c
-            for c in pool
+            for c in left
             if plugin_config.sub_fallback_min_size_gb
             <= c.median_gb
             <= plugin_config.sub_max_size_gb
         ]
-        best = pick_best(relaxed, require_size_ok=False)
-        fallback = best is not None
+        pick = pick_best(relaxed, require_size_ok=False)
+        return pick, pick is not None
+
+    async def _next(skip: set[str]) -> tuple[Candidate | None, bool]:
+        """挑下一条：池里挑不到就接着往后扫，扫完再挑。"""
+        while True:
+            pick, fell_back = _select(skip)
+            if pick is not None:
+                return pick, fell_back
+            if scan_pos >= len(pending):
+                return None, False
+            await _scan_batches()
+
+    await _scan_batches()
+
+    best, fallback = await _next(set())
     if best is None:
         stats = f"检查了 {checked} 个分享（{failed} 个链接失效、{empty} 个没有视频文件"
         if off_season:
@@ -505,7 +578,7 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
         if not candidates:
             hint = f"，没有第 {season} 季的资源" if off_season else "，没有可用资源"
             return f"❌ {stats}{hint}\n　　{local_desc}"
-        if not any(c.size_ok for c in pool):
+        if not any(c.size_ok for c in _pool()):
             medians = sorted(round(c.median_gb, 2) for c in candidates if c.median_gb)
             span = f"，实测每集中位数 {medians[0]}~{medians[-1]}G" if medians else ""
             return (
@@ -517,70 +590,116 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
         return f"✅ 已经是最新，没有新集\n　　{local_desc}（{stats}）"
 
     # 4. 建任务（统一重命名成 SxxExx）→ 转存 → 删任务
-    task = TaskItem.simple_from_title(title, best.shareurl)
-    task.taskname = sanitize_title(title)
-    task.savepath = savepath
-    # 本季标记可有可无：`S01E07` 和裸 `E06` 在同一个分享里是常态，只认一种
-    # 就会漏集（真机幻视任务：7 集只转了 E07）。别的季一律不碰。
-    task.pattern, task.replace = season_or_bare_rules(season)
-    # pattern 同时是 QASx 的筛选条件：匹配不上文件名不转存。所以「新增几集」
-    # 只能算真正会被转存的那几集——合集里既有 S02E05 又有 E01 时，E01 会被跳过
-    # （真机：法警小队 报「新增 15 集」，落盘只有 3 个）。
-    # 预算不出来时（文件名写法比本地正则更野）不能拦，交给 QASx 自己判断。
-    transferable = [n for n in best.video_files if re.search(task.pattern, n)]
-    if not transferable:
-        # 命名规则一个都匹配不上就真的下不了任何东西，别建任务白跑一轮
-        return (
-            f"❌ 选中的分享（{best.shareurl}）文件名和命名规则对不上，本轮跳过\n"
-            f"　　{local_desc}\n"
-            f"　　（分享里 {len(best.video_files)} 个视频，没有一个是第 {season} 季的命名）"
-        )
-    transfer_keys = best.new_episodes & episode_keys(transferable, season)
-    dropped = best.new_episodes - transfer_keys
-    if not transfer_keys:
-        transfer_keys = best.new_episodes
-    # 交给 QASx 任务默认配置；注意别写成 None —— null 会让 QASx 的 /update 直接 500
-    task.addition = {}
+    # 落 0 个就换下一条：QASx 的 transfer_records 是按 file_id + 任务名去重的。
+    # 同一条分享以前转过、之后目录被人清空了，再建任务 QASx 只会回「没有新的文件
+    # 需要转存」，一个都不落（真机：走马上任 11 集全在记录里，目录却是空的）。
+    # 光看回执会当成成功，所以跑完必须回目录数一遍，没落下就换下一条再试。
+    tried: list[str] = []
+    while best is not None:
+        tried.append(best.shareurl)
+        task = TaskItem.simple_from_title(title, best.shareurl)
+        task.taskname = sanitize_title(title)
+        task.savepath = savepath
+        # 本季标记可有可无：`S01E07` 和裸 `E06` 在同一个分享里是常态，只认一种
+        # 就会漏集（真机幻视任务：7 集只转了 E07）。别的季一律不碰。
+        task.pattern, task.replace = season_or_bare_rules(season)
+        # pattern 同时是 QASx 的筛选条件：匹配不上文件名不转存。所以「新增几集」
+        # 只能算真正会被转存的那几集——合集里既有 S02E05 又有 E01 时，E01 会被跳过
+        # （真机：法警小队 报「新增 15 集」，落盘只有 3 个）。
+        transferable = [n for n in best.video_files if re.search(task.pattern, n)]
+        if not transferable:
+            logger.info(
+                f"订阅[{name}] 分享 {best.shareurl} 文件名和命名规则对不上，换下一条"
+            )
+            best, fallback = await _next(set(tried))
+            continue
+        transfer_keys = best.new_episodes & episode_keys(transferable, season)
+        dropped = best.new_episodes - transfer_keys
+        if not transfer_keys:
+            transfer_keys = best.new_episodes
+        # 交给 QASx 任务默认配置；注意别写成 None —— null 会让 QASx 的 /update 直接 500
+        task.addition = {}
 
-    new_desc = f"新增 {fmt_episode_keys(transfer_keys)}（{len(transfer_keys)} 集）"
-    logger.info(f"订阅[{name}] 选中 {best.shareurl} {new_desc}")
-    try:
-        await client.add_task(task)
-    except QASException as exc:
-        return f"❌ 添加任务失败: {exc}\n　　{local_desc}"
+        new_desc = f"新增 {fmt_episode_keys(transfer_keys)}（{len(transfer_keys)} 集）"
+        logger.info(f"订阅[{name}] 选中 {best.shareurl} {new_desc}")
+        try:
+            await client.add_task(task)
+        except QASException as exc:
+            await _cleanup(client, task)
+            logger.error(f"订阅[{name}] 添加任务失败: {exc}")
+            best, fallback = await _next(set(tried))
+            continue
 
-    script_output: list[str] = []
-    try:
-        async for chunk in client.run_script(task):
-            script_output.append(chunk)
-    except QASException as exc:
-        await _cleanup(client, task)
-        return f"❌ 转存失败: {exc}\n　　{local_desc}"
+        script_output: list[str] = []
+        run_error = ""
+        try:
+            async for chunk in client.run_script(task):
+                script_output.append(chunk)
+        except QASException as exc:
+            run_error = str(exc)
+            logger.error(f"订阅[{name}] 转存失败: {exc}")
 
-    cleaned = await _cleanup(client, task)
-    result = parse_run_output(script_output)
-    head = result.render(fallback_savepath=savepath).strip()
-    # 「没有新文件」时不能再说「新增了哪些集」——那句预测和实际结果会互相打架
-    detail = local_desc if result.status == "no_new" else f"{local_desc} → {new_desc}"
-    lines = [head, f"　　{detail}"]
-    if fallback:
-        lines.append(
-            f"　　⚠️ 没有 {plugin_config.sub_min_size_gb}~{plugin_config.sub_max_size_gb}G 的分享，"
-            f"改用每集约 {best.median_gb:.2f}G 的（正片偏小，画质可能一般）"
+        cleaned = await _cleanup(client, task)
+        if run_error:
+            best, fallback = await _next(set(tried))
+            continue
+
+        result = parse_run_output(script_output)
+        head = result.render(fallback_savepath=savepath).strip()
+        # 回目录数一遍：QASx 回「转存完成」不等于文件真在里面
+        after = episode_keys(
+            video_names_from_dir(await client.list_savepath_files(savepath)), season
         )
-    if best.missing:
-        lines.append(
-            f"　　⚠️ 没找到能补全的链接，这条缺 {fmt_episode_keys(best.missing)}"
-            f"（{len(best.missing)} 集），缺的下轮再补"
-        )
-    if dropped:
-        lines.append(
-            f"　　⚠️ 另有 {len(dropped)} 集文件名不带季数，按命名规则转不了，本轮跳过"
-            f"（{fmt_episode_keys(dropped)}）"
-        )
-    if not cleaned:
-        lines.append("　　⚠️ 任务未从 QAS 删除，请手动清理")
-    return "\n".join(lines)
+        landed = transfer_keys & after
+        if not landed and len(tried) < max(1, plugin_config.sub_transfer_attempts):
+            logger.info(
+                f"订阅[{name}] 分享 {best.shareurl} 一个都没落下（{head}），换下一条再试"
+            )
+            best, fallback = await _next(set(tried))
+            continue
+
+        # 「没有新文件」时不能再说「新增了哪些集」——那句预测和实际结果会互相打架
+        detail = f"{local_desc} → {new_desc}" if landed else local_desc
+        lines = [head, f"　　{detail}"]
+        if cleared:
+            lines.append(f"　　ℹ️ 清掉 {cleared} 条过期转存记录（本地已没有这些集）")
+        if not landed:
+            lines.append(
+                "　　⚠️ 一个文件都没落下：这些集在 QASx 的转存记录里已经有了"
+                "（按 file_id + 任务名去重），本地目录却是空的，只能清记录"
+            )
+        if len(tried) > 1:
+            lines.append(f"　　ℹ️ 前面 {len(tried) - 1} 条分享没落下文件，已换到下一条")
+        if fallback:
+            lines.append(
+                f"　　⚠️ 没有 {plugin_config.sub_min_size_gb}~{plugin_config.sub_max_size_gb}G 的分享，"
+                f"改用每集约 {best.median_gb:.2f}G 的（正片偏小，画质可能一般）"
+            )
+        if best.missing:
+            lines.append(
+                f"　　⚠️ 没找到能补全的链接，这条缺 {fmt_episode_keys(best.missing)}"
+                f"（{len(best.missing)} 集），缺的下轮再补"
+            )
+        if dropped:
+            lines.append(
+                f"　　⚠️ 另有 {len(dropped)} 集文件名和命名规则对不上，本轮跳过"
+                f"（{fmt_episode_keys(dropped)}）"
+            )
+        if best.dup_episodes:
+            lines.append(
+                f"　　⚠️ 这条分享里 {fmt_episode_keys(best.dup_episodes)} 各有两份文件，"
+                f"会多落一份（QASx 认不出同集异名）"
+            )
+        if not cleaned:
+            lines.append("　　⚠️ 任务未从 QAS 删除，请手动清理")
+        return "\n".join(lines)
+
+    return (
+        f"❌ 试了 {len(tried)} 条分享，一个文件都没落下\n"
+        f"　　{local_desc}\n"
+        f"　　（这些分享的集数在 QASx 转存记录里已经有了，本地目录却是空的；"
+        f"清掉转存记录后下轮才能重下）"
+    )
 
 
 async def _report(text: str) -> None:

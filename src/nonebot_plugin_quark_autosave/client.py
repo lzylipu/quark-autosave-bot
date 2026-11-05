@@ -411,6 +411,50 @@ class QASClient:
         logger.warning(f"QASx 删除文件 {fid} 失败: {str(data)[:200]}")
         return False
 
+    async def history_records(self, task_name: str, page_size: int = 100) -> list[dict[str, Any]]:
+        """读 QASx 的转存记录（`/history_records`）。QASx 靠它去重。
+
+        `file_id + task_name` 命中就跳过 —— 所以「云盘里文件被删了、记录还留着」时，
+        同一个任务名永远转不进来。见 `_run_one_subscription` 里的清记录逻辑。
+        """
+        records: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            response = await self._request_with_retry(
+                "GET",
+                "/history_records",
+                params={
+                    "task_name": task_name,
+                    "page": page,
+                    "page_size": page_size,
+                },
+            )
+            data = response.json()
+            if not isinstance(data, dict) or not data.get("success"):
+                logger.warning(f"QASx 读转存记录失败: {str(data)[:200]}")
+                return records
+            payload = data.get("data") or {}
+            batch = payload.get("records") or []
+            records.extend(batch)
+            pagination = payload.get("pagination") or {}
+            total_pages = int(pagination.get("total_pages") or 1)
+            if page >= total_pages or not batch:
+                return records
+            page += 1
+
+    async def delete_history_records(self, record_ids: list[int]) -> int:
+        """删掉指定的转存记录，返回真删掉的条数（`/delete_history_records`）。"""
+        if not record_ids:
+            return 0
+        response = await self._request_with_retry(
+            "POST", "/delete_history_records", json={"record_ids": list(record_ids)}
+        )
+        data = response.json()
+        if isinstance(data, dict) and data.get("success"):
+            return int(data.get("deleted_count") or 0)
+        logger.warning(f"QASx 删除转存记录失败: {str(data)[:200]}")
+        return 0
+
     async def list_tasks(self) -> list[TaskItem]:
         data = await self.get_data()
         return data.tasklist

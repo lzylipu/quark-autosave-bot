@@ -327,6 +327,14 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 
 ## 📝 Changelog
 
+### v0.5.3
+
+- 🐞 **"No new files to transfer" no longer means nothing happened**: QASx dedupes on `file_id + task name`, so once the cloud files are deleted while the transfer records remain, that show can never be downloaded again (real case: all 11 episodes of a show were in the records while its folder was empty — every run answered "no new files")
+- 🧹 **Stale records are cleaned automatically**: only records with the same task name, the same save path and an episode that is genuinely gone locally are removed — other shows, paths and seasons are untouched
+- 🔁 **Zero files landed means try the next share**: after a transfer the folder is re-read and counted; if nothing landed the next candidate share is tried (up to 3), and if all fail the report says so instead of pretending success
+- ⚠️ **Warning when one episode ships twice**: a share containing both `07.mkv` and `S01E07.mkv` looks like two episodes to QASx, so one extra file lands — now called out in the report
+- 🧪 5 new unit tests (record-clearing boundaries / share retry / all-failed report / duplicate warning / fake landed-file simulation), 143 passed
+
 ### v0.5.2
 
 - 🗣 **Friendlier commands**: `列表` lists subscriptions, `del <title>` unsubscribes (`LIST` / `DL` still work)

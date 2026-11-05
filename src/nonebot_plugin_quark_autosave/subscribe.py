@@ -417,6 +417,9 @@ class Candidate:
     # 这条分享「本该有却没给」的集：本地已有 E01~E10、分享里只有 E12，
     # 那 E11 就是 missing —— 缺集的更新包不能选中，否则 E11 永久跳过
     missing: set = field(default_factory=set)
+    # 同一集在分享里出现两次的文件（如 S01E07.mkv + 07.mkv）：QASx 按文件名查重时
+    # 认不出它们是一集，会各落一份，落盘名也就统一不了。只做提示，不当不合格。
+    dup_episodes: set = field(default_factory=set)
 
 
 def video_median_gb(files) -> float:
@@ -473,6 +476,20 @@ def missing_episodes(share_keys, local_keys) -> set:
     return gap
 
 
+def duplicate_episodes(names, season: int = 1) -> set:
+    """同一集在分享里出现了两次的集。
+
+    真机：走马上任 的分享里既有 `07.mkv`（2.92G）又有 `S01E07.mkv`（0.97G），
+    QASx 按文件名查重（忽略后缀）认不出它们是一集，各转一份 —— 落盘就是
+    `S01E07.mkv` + `07.mkv`（改名撞名，第二份保留原名）。这里只统计出来提示用户。
+    """
+    seen: dict = {}
+    for name in names:
+        for key in episode_keys([name], season):
+            seen[key] = seen.get(key, 0) + 1
+    return {key for key, count in seen.items() if count > 1}
+
+
 def assess_share(
     shareurl: str,
     files,
@@ -504,6 +521,7 @@ def assess_share(
         median_gb=video_median_gb(files),
         title_hit=hit,
         missing=missing_episodes(share_keys, local_keys),
+        dup_episodes=duplicate_episodes(names, season),
     )
 
 
