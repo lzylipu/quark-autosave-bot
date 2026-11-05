@@ -259,6 +259,23 @@ class TestSubscriptionStore:
         assert store.list_all() == ["甄嬛传"]
         assert store.get_chat_id() == "12345"
 
+    def test_chat_id_written_as_plain_number(self, tmp_path):
+        """手写文件把 __chat_id__ 写成数字也要认（真机就是这么丢的整轮报告）。
+
+        真机：`{"__chat_id__": 1516374642}` → get_chat_id 里 `.get("id")` 抛
+        AttributeError，定时任务整轮被标失败，结果一条没发出去。
+        """
+        path = tmp_path / "subs.json"
+        path.write_text('{"__chat_id__": 1516374642}', encoding="utf-8")
+        store = SubscriptionStore(path)
+        assert store.get_chat_id() == "1516374642"
+
+    def test_chat_id_missing_or_empty(self, tmp_path):
+        path = tmp_path / "subs.json"
+        path.write_text('{"__chat_id__": ""}', encoding="utf-8")
+        assert SubscriptionStore(path).get_chat_id() is None
+        assert SubscriptionStore(tmp_path / "none.json").get_chat_id() is None
+
     def test_broken_file_recovers(self, tmp_path):
         path = tmp_path / "subs.json"
         path.write_text("not json", encoding="utf-8")

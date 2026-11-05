@@ -41,7 +41,11 @@ from .subscribe import (
 __plugin_meta__ = PluginMetadata(
     name="夸克自动转存",
     description="发夸克链接直接转存，智能检测链接有效性",
-    usage="直接发送夸克网盘链接即可，如: https://pan.quark.cn/s/xxxxx?pwd=1234",
+    usage=(
+        "直接发夸克链接即可转存，如 https://pan.quark.cn/s/xxxxx?pwd=1234\n"
+        "AD 片名 订阅追剧（AD 某剧 S02 指定第二季）\n"
+        "列表 看订阅　del 片名 取消　执行 立刻跑一轮（执行 片名 只跑一部）"
+    ),
     type="application",
     homepage="https://github.com/lzylipu/quark-autosave-bot",
     config=Config,
@@ -254,12 +258,24 @@ async def handle_reject(event: Event):
 
 
 # ======================================================================
-# 追剧订阅：AD / DL / LIST 命令 + 每天定时搜索补缺转存
+# 追剧订阅：AD / 列表 / del / 执行 + 每天定时搜索补缺转存
 # ======================================================================
 
 store = SubscriptionStore(plugin_config.sub_store_file)
 
-_SUB_CMD_RE = re.compile(r"^\s*(AD|DL|LIST)(?=\s|$)\s*(.*)$", re.IGNORECASE | re.DOTALL)
+# 中文命令是主入口；DL / LIST 保留成别名，老用户和旧文档里的写法照样能用
+_SUB_ALIASES = {
+    "AD": "AD",
+    "列表": "LIST",
+    "LIST": "LIST",
+    "DEL": "DL",
+    "DL": "DL",
+    "执行": "RUN",
+    "RUN": "RUN",
+}
+_SUB_CMD_RE = re.compile(
+    r"^\s*(AD|列表|LIST|DEL|DL|执行|RUN)(?=\s|$)\s*(.*)$", re.IGNORECASE | re.DOTALL
+)
 
 
 async def _is_sub_command(bot: Bot, event: Event) -> bool:
@@ -288,7 +304,26 @@ def _chat_id_of(event: Event) -> str | None:
 @sub_handler.handle()
 async def handle_sub_command(event: Event):
     match = _SUB_CMD_RE.match(get_text(event))
-    cmd, arg = match.group(1).upper(), match.group(2).strip()
+    if match is None:  # rule 已过滤，这里只是给类型检查器一个交代
+        return
+    cmd = _SUB_ALIASES[match.group(1).upper()]
+    arg = match.group(2).strip()
+
+    if cmd == "RUN":
+        # 手动唤起一轮定时任务：不等到点，立刻按当前订阅跑一遍
+        names = [arg.strip()] if arg.strip() else store.list_all()
+        if not names:
+            await sub_handler.finish("📭 订阅列表是空的，用「AD 片名」订阅")
+        missing = [n for n in names if n not in store.list_all()]
+        if missing:
+            await sub_handler.finish(
+                f"❓ 没有这个订阅: {'、'.join(missing)}\n用「列表」看看有哪些"
+            )
+        # 后台跑：一轮要搜十几条分享，几十秒到几分钟，命令 handler 不能干等
+        asyncio.get_running_loop().create_task(_run_all_subscriptions(names))
+        await sub_handler.finish(
+            f"⏳ 开始执行 {len(names)} 个订阅（{'、'.join(names)}），跑完会发结果"
+        )
 
     if cmd == "AD":
         # 记住会话，定时任务的报告发回这里（写不进去不影响下面存订阅，但要提示）
@@ -308,7 +343,10 @@ async def handle_sub_command(event: Event):
     if not names:
         await sub_handler.finish("📭 订阅列表是空的，用「AD 片名」订阅")
     data = store.load()
-    lines = [f"📋 订阅列表（每天 {plugin_config.sub_check_time} 自动执行）:"]
+    lines = [
+        f"📋 订阅列表（每天 {plugin_config.sub_check_time} 自动执行）:",
+        "　 发「执行」立刻跑一轮，「del 片名」取消订阅",
+    ]
     for i, name in enumerate(names, 1):
         last = data.get(name, {}).get("last_result", "")
         lines.append(f"{i}. {name}" + (f"\n   └ 上次: {last}" if last else "\n   └ 还没跑过"))
@@ -546,7 +584,12 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
 
 
 async def _report(text: str) -> None:
-    chat_id = store.get_chat_id()
+    try:
+        chat_id = store.get_chat_id()
+    except Exception as exc:  # 订阅文件写坏/格式怪，不能让整轮任务陪葬
+        logger.error(f"读取报告会话失败: {exc}")
+        logger.info(f"订阅报告（只打日志）: {text}")
+        return
     if not chat_id:
         logger.info(f"订阅报告（无会话记录，只打日志）: {text}")
         return
@@ -559,8 +602,24 @@ async def _report(text: str) -> None:
         logger.error(f"订阅报告发送失败: {exc}")
 
 
-async def _run_all_subscriptions() -> None:
-    names = store.list_all()
+# 「执行」和定时任务可能撞车：同一时间只跑一轮，避免两边同时建任务/删任务
+_sub_running = False
+
+
+async def _run_all_subscriptions(names: list[str] | None = None) -> None:
+    """跑一轮订阅。names 为空则跑全部（定时任务走这条）。"""
+    global _sub_running
+    if _sub_running:
+        logger.info("上一轮订阅还在跑，本次跳过")
+        return
+    _sub_running = True
+    try:
+        await _run_subscriptions(names or store.list_all())
+    finally:
+        _sub_running = False
+
+
+async def _run_subscriptions(names: list[str]) -> None:
     if not names:
         logger.info("订阅列表为空，跳过本轮")
         return

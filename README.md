@@ -112,9 +112,13 @@ quark-autosave-bot/
 
 ```
 AD 甄嬛传        → 加入订阅（也可以写 AD 庆余年 S02 指定季）
-LIST             → 查看订阅列表和上次结果
-DL 甄嬛传        → 取消订阅
+列表             → 查看订阅列表和上次结果
+del 甄嬛传       → 取消订阅
+执行             → 不用等到点，立刻跑一轮全部订阅
+执行 甄嬛传      → 只跑这一部
 ```
+
+`LIST` / `DL` 这两个旧写法仍然能用，和「列表」/「del」是同一个命令。
 
 每天 `SUB_CHECK_TIME`（默认 17:00）对每部订阅执行：
 
@@ -168,6 +172,10 @@ docker run -d \
   --log-opt max-file=3 \
   lzylipu/quarkbot:latest
 ```
+
+> ⚠️ **同一个 Bot Token 只能跑一个实例**。两个容器（比如正式一个、测试一个）同时用同一个
+> token 长轮询，Telegram 会返回 `409 Conflict: terminated by other getUpdates request`，
+> 两边互相踢，表现就是「机器人时好时坏、忽然不理人」。旧容器要 `docker stop` 掉再起新的。
 
 ### 📦 Docker Compose（推荐）
 
@@ -314,6 +322,13 @@ PYTHONPATH=src python3 tests/e2e/e2e_share_expand.py    # 真分享递归展开�
 ---
 
 ## 📝 更新日志
+
+### v0.5.2
+
+- 🗣 **命令改成中文更好记**：`列表` 看订阅、`del 片名` 取消订阅（`LIST` / `DL` 老写法仍可用）
+- ⚡ **`执行` 立刻跑一轮**：不用等到 17:00，`执行 片名` 只跑那一部；正在跑的时候再发不会重复跑
+- 🐞 **修掉整轮报告全丢**：手写的 `subscriptions.json` 把 `__chat_id__` 写成数字时，取会话 ID 会抛异常，整轮定时任务被标失败、结果一条都发不出去
+- 🧪 新增 7 个单测（中文命令 / 旧写法兼容 / 相似词不误触 / 只跑指定订阅 / 两种会话 ID 写法），共 138 passed
 
 ### v0.5.1
 

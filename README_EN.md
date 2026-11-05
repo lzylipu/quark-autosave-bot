@@ -145,7 +145,11 @@ docker run -d \
   lzylipu/quarkbot:latest
 ```
 
-### 📦 Docker Compose (Recommended)
+> ⚠️ **One bot token = one instance.** Two containers long-polling with the same token make
+> Telegram answer `409 Conflict: terminated by other getUpdates request`; they keep kicking each
+> other and the bot looks flaky or mute. Stop the old container before starting a new one.
+
+### 📦 Docker Compose (recommended)
 
 The project includes a `compose.yml` that orchestrates both the Bot and the QAS service with internal networking:
 
@@ -163,8 +167,10 @@ docker compose up -d
 
 ```
 AD Downton        → subscribe (AD 庆余年 S02 pins a season)
-LIST              → list subscriptions and their last result
-DL Downton        → unsubscribe
+列表 (or LIST)    → list subscriptions and their last result
+del Downton       → unsubscribe
+执行 (or RUN)     → run one round now instead of waiting for the scheduled time
+执行 Downton      → run that single subscription
 ```
 
 Every day at `SUB_CHECK_TIME` (default 17:00):
@@ -320,6 +326,13 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 ---
 
 ## 📝 Changelog
+
+### v0.5.2
+
+- 🗣 **Friendlier commands**: `列表` lists subscriptions, `del <title>` unsubscribes (`LIST` / `DL` still work)
+- ⚡ **`执行` runs a round right now** — no need to wait for 17:00; `执行 <title>` runs just that one, and a second request while one is running is ignored
+- 🐞 **A whole round of reports could vanish**: when a hand-written `subscriptions.json` stored `__chat_id__` as a plain number, reading it raised and the scheduled run was marked failed with nothing delivered
+- 🧪 7 new unit tests (Chinese commands / legacy aliases / lookalike words ignored / single-subscription run / both chat-id shapes), 138 passed
 
 ### v0.5.1
 

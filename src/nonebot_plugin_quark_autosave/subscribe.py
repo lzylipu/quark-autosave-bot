@@ -172,7 +172,7 @@ class SubscriptionStore:
         data = self.load()
         if not name:
             names = self.list_all()
-            return False, "用法: DL 片名（当前订阅: " + ("、".join(names) if names else "空") + "）"
+            return False, "用法: del 片名（当前订阅: " + ("、".join(names) if names else "空") + "）"
         if name not in data:
             return False, f"没有订阅过「{name}」"
         data.pop(name)
@@ -190,12 +190,23 @@ class SubscriptionStore:
         return self._save_or_explain(data)
 
     def get_chat_id(self) -> str | None:
-        return self.load().get("__chat_id__", {}).get("id")
+        """取报告发往的会话。
+
+        手写的 subscriptions.json 常把 __chat_id__ 直接写成数字
+        （`{"__chat_id__": 1516374642}`），以前这里直接 `.get("id")` 会抛
+        AttributeError，把整轮定时任务的报告全吞掉。两种写法都认。
+        """
+        raw = self.load().get("__chat_id__")
+        if isinstance(raw, dict):
+            value = raw.get("id")
+        else:
+            value = raw
+        return str(value) if value not in (None, "") else None
 
     def set_chat_id(self, chat_id: str) -> bool:
         """记住报告发往哪个会话；写不进去返回 False（不抛异常，别把 AD 命令搞崩）。"""
         data = self.load()
-        if data.get("__chat_id__", {}).get("id") == chat_id:
+        if self.get_chat_id() == str(chat_id):
             return True
         data["__chat_id__"] = {"id": chat_id}
         return self._save_or_explain(data)
