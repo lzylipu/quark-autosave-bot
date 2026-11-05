@@ -201,7 +201,9 @@ class TaskItem(BaseModel):
             pattern="",
             replace="",
             enddate="",
-            ignore_extension=False,
+            # 忽略后缀：同一集已经有 S01E05.mkv 时，再来 S01E05.mp4 不再重复转存。
+            # 不开的话 QASx 按「完整文件名」比对，一集 mkv+mp4 会存成两份。
+            ignore_extension=True,
             # 递归所有子目录：分享根常是「文件夹套文件夹」，不设它 QASx 一个文件都不转存
             update_subdir=".*",
             skip_calendar=True,

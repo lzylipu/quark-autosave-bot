@@ -321,6 +321,13 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 
 ## 📝 Changelog
 
+### v0.4.7
+
+- 🎞 **Not just mp4/mkv anymore**: `avi`/`ts`/`rmvb`/`mov`/`m2ts` episodes are transferred too (the pattern used to filter them out, so those episodes could never be filled in)
+- 🔠 Uppercase extensions like `.MKV`/`.MP4` now match (QASx calls `re.search` without flags, fixed with an inline `(?i:)` group)
+- ♻️ **QASx "ignore extension" is now enabled**: when `S01E05.mkv` already exists, a later `S01E05.mp4` is not stored twice
+- 🧪 3 new unit tests (other video formats / uppercase extensions / posters and subtitles still excluded), 121 passed
+
 ### v0.4.6
 
 - 🔧 **No manual `chown` anymore**: the image now starts as root and `start.sh` hands `/app/data` to the runtime user (uid 1000) before dropping privileges, so a root-owned host directory just works

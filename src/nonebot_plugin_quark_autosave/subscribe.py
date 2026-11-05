@@ -34,6 +34,12 @@ VIDEO_EXTS = frozenset({
 
 GB = 1024**3
 
+# 正则里用的扩展名分支（和 VIDEO_EXTS 同一份，别各写一套）。
+# 原来只写 mp4|mkv，分享里给 avi/ts/rmvb 的整集会被 pattern 挡掉——pattern 同时是
+# QASx 的筛选条件，匹配不上就不转存，等于「这个格式的集永远补不上」。
+# (?i:...) 让 .MKV/.MP4 这种大写后缀也认——QASx 是 re.search(pattern, name)，没带 flags
+EXT_GROUP = "((?i:" + "|".join(sorted(VIDEO_EXTS)) + "))"
+
 # QASx 内置 $TV 规则的正则：第 1 组季、第 2 组集数、第 3 组扩展名。
 # 区别只在替换模板——QASx 原版是 "\1E\2.\3"（原文件名没有 S01 就补不上），
 # 我们固定写成 "S01E\2.\3"，让落盘文件统一带季数。
@@ -47,14 +53,15 @@ GB = 1024**3
 #   （真机：我的阿勒泰 8 集全是 01.mkv~08.mkv）。
 TV_PATTERN = (
     r"(?:.*?([Ss]\d{1,2})?(?:[第EePpXx\.\-_\\(\[]|\s){1,2}|^)"
-    r"(\d{1,3})(?![\dA-Za-z]).*?\.(mp4|mkv)"
+    r"(\d{1,3})(?![\dA-Za-z]).*?\." + EXT_GROUP
 )
 
 # 文件名里已经带 season 的分享（合集里常见）用这个：强制捕获季数。
 # TV_PATTERN 的季数捕获是可选的，遇到「…2020.S03.EP07…」会先匹配到
 # 不带季的分支，结果只剩 E07——所以合集必须换这条。
 SEASON_TV_PATTERN = (
-    r".*?[Ss](\d{1,2})\s*[\.\-_ ]*\s*(?:[Ee][Pp]?)?\s*(\d{1,3})(?![\dA-Za-z]).*?\.(mp4|mkv)"
+    r".*?[Ss](\d{1,2})\s*[\.\-_ ]*\s*(?:[Ee][Pp]?)?\s*(\d{1,3})(?![\dA-Za-z]).*?\."
+    + EXT_GROUP
 )
 
 _CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
@@ -244,7 +251,8 @@ def season_rename_rules(season: int) -> tuple[str, str]:
     只会转存第 5 季，不会把别的季一起下进来。
     """
     return (
-        rf".*?[Ss]0?{season}(?!\d)\s*[\.\-_ ]*\s*(?:[Ee][Pp]?)?\s*(\d{{1,3}})(?![\dA-Za-z]).*?\.(mp4|mkv)",
+        rf".*?[Ss]0?{season}(?!\d)\s*[\.\-_ ]*\s*(?:[Ee][Pp]?)?\s*(\d{{1,3}})(?![\dA-Za-z]).*?\."
+        + EXT_GROUP,
         rf"S{season:02d}E\1.\2",
     )
 

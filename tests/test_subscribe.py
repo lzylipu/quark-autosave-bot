@@ -99,6 +99,26 @@ class TestRenameRules:
         assert self._apply("1080p.mkv") == "1080p.mkv"
         assert self._apply("2160p.mkv") == "2160p.mkv"
 
+    def test_other_video_extensions_are_not_dropped(self):
+        """avi/ts/rmvb 也是视频集，不能因为 pattern 只写 mp4|mkv 就被整集漏掉。
+
+        pattern 同时是 QASx 的筛选条件，匹配不上就不转存——等于这种格式永远补不上，
+        还会让本地「已有几集」和分享里的集数对不上。
+        """
+        assert self._apply("甄嬛传.E05.avi") == "S01E05.avi"
+        assert self._apply("甄嬛传.第07集.ts") == "S01E07.ts"
+        assert self._apply("12.rmvb") == "S01E12.rmvb"
+
+    def test_uppercase_extension(self):
+        """QASx 用 re.search 不带 flags，.MKV/.MP4 必须靠内联 (?i:) 才认。"""
+        assert self._apply("甄嬛传.E05.MKV") == "S01E05.MKV"
+        assert self._apply("08.MP4") == "S01E08.MP4"
+
+    def test_non_video_files_never_match(self):
+        # 海报/字幕/种子混在分享里时不能当作剧集转存
+        for name in ("poster.jpg", "a.nfo", "sample.srt", "readme.txt"):
+            assert self._apply(name) == name
+
     def test_season_two(self):
         assert self._apply("庆余年.01.mkv", season=2) == "S02E01.mkv"
         assert self._apply("庆余年.S02E07.mkv", season=2) == "S02E07.mkv"

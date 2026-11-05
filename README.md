@@ -315,6 +315,13 @@ PYTHONPATH=src python3 tests/e2e/e2e_share_expand.py    # 真分享递归展开�
 
 ## 📝 更新日志
 
+### v0.4.7
+
+- 🎞 **不再只认 mp4/mkv**：`avi`/`ts`/`rmvb`/`mov`/`m2ts` 等视频格式也能转存（以前这些集被 pattern 挡掉，永远补不上）
+- 🔠 `.MKV`/`.MP4` 这种大写后缀也认（QASx 是 `re.search` 不带 flags，靠内联 `(?i:)` 解决）
+- ♻️ **开启 QASx 的「忽略后缀」**：同一集已有 `S01E05.mkv` 时，再来 `S01E05.mp4` 不再重复存一份
+- 🧪 新增 3 个单测（其它视频格式 / 大写后缀 / 海报字幕不误转），共 121 passed
+
 ### v0.4.6
 
 - 🔧 **不用再手动 `chown`**：镜像改为 root 启动，`start.sh` 自己把 `/app/data` 交给运行用户（uid 1000）再降权运行，宿主机目录属主是 root 也直接能写

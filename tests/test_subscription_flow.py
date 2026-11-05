@@ -74,6 +74,8 @@ async def test_flow_adds_task_with_season_prefix_and_cleans_up():
     assert task.savepath == "/自动/甄嬛传"
     assert task.replace == "S01E\\2.\\3"  # 统一补季数
     assert task.addition == {}  # 插件设置交给 QASx 默认；不能是 None，否则 /update 500
+    # 同一集已有 mkv 时不再存一份 mp4（QASx 不开这个按完整文件名去重）
+    assert task.ignore_extension is True
     assert task.pattern
     assert client.deleted and client.deleted[0].shareurl == task.shareurl
     assert "E10~E12" in report  # 本地 1~9，新增 10~12
