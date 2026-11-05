@@ -321,6 +321,13 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 
 ## 📝 Changelog
 
+### v0.5.1
+
+- 🧩 **Both naming styles in one share are transferred**: with `Show.S01E07.mkv` and bare `E06.mkv` mixed together, only one style used to match and just 1 of 7 episodes was transferred. The season marker is now optional while other seasons are still excluded
+- 🛡 **A missing folder no longer borrows another show's episodes**: QASx silently falls back to the parent folder for a nonexistent save path (`/auto/show` returns `/auto`). Those files used to be counted as "already have", so the pending episodes were never filled in
+- 🔌 **Telegram polling self-heals**: when the long poll fails during startup (`get_me`/`delete_webhook`), the adapter's poll task dies and the process stays alive but stops receiving messages. It now retries every 10 seconds — the official API itself has hiccups
+- 🧪 5 new unit tests (mixed naming / parent fallback / reconnect), 131 passed
+
 ### v0.5.0
 
 - 🎯 **A share must contain every pending episode**: local E01~E10 needing E11+E12 — a share with only E12 is skipped, scanning continues for one with both. Previously any single new episode triggered a download and the missing one was lost forever

@@ -32,7 +32,7 @@ from .subscribe import (
     pick_best,
     persistence_warning,
     rename_rules,
-    season_rename_rules,
+    season_or_bare_rules,
     seconds_until,
     split_season,
     video_names_from_dir,
@@ -482,13 +482,9 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
     task = TaskItem.simple_from_title(title, best.shareurl)
     task.taskname = sanitize_title(title)
     task.savepath = savepath
-    # 分享里只要出现了季标记，就只认目标季：别季的文件一律不碰，没标季的也不碰
-    # （裸 E01.mkv 归哪一季无法确定，猜错就是下错季）。全是裸文件名时才算本季。
-    keep_season = any(parse_season(n) for n in best.video_files)
-    if keep_season:
-        task.pattern, task.replace = season_rename_rules(season)
-    else:
-        task.pattern, task.replace = rename_rules(season, keep_season_in_name=False)
+    # 本季标记可有可无：`S01E07` 和裸 `E06` 在同一个分享里是常态，只认一种
+    # 就会漏集（真机幻视任务：7 集只转了 E07）。别的季一律不碰。
+    task.pattern, task.replace = season_or_bare_rules(season)
     # pattern 同时是 QASx 的筛选条件：匹配不上文件名不转存。所以「新增几集」
     # 只能算真正会被转存的那几集——合集里既有 S02E05 又有 E01 时，E01 会被跳过
     # （真机：法警小队 报「新增 15 集」，落盘只有 3 个）。

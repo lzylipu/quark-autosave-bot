@@ -82,6 +82,31 @@ async def test_list_savepath_files_returns_entries():
 
 
 @pytest.mark.asyncio
+async def test_list_savepath_files_rejects_parent_fallback():
+    """目录不存在时 QASx 会返回父目录的内容，不能把别的剧的文件算成本剧已有。
+
+    真机：/自动/走马上任 目录被删后，`paths` 只剩 ["自动"]，list 是 /自动 下的
+    四个剧目录；不校验就会把尚公主的 S01E24 当成「走马上任已有第 24 集」。
+    """
+
+    async def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {
+                    "list": [{"file_name": "尚公主", "dir": True, "size": 0}],
+                    "paths": [{"fid": "x", "name": "自动"}],
+                },
+            },
+        )
+
+    client = make_client(handler)
+    assert await client.list_savepath_files("/自动/走马上任") == []
+    await client.client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_list_savepath_files_missing_dir_is_empty():
     """首次订阅时保存目录还不存在——必须当成「一集都没有」，不能抛异常。"""
 

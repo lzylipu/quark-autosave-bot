@@ -243,18 +243,16 @@ def rename_rules(season: int, keep_season_in_name: bool = False) -> tuple[str, s
     return TV_PATTERN, f"S{season:02d}E\\2.\\3"
 
 
-def season_rename_rules(season: int) -> tuple[str, str]:
-    """只认某一季的重命名规则（S05E01）。
+def season_or_bare_rules(season: int) -> tuple[str, str]:
+    """本季的文件 + 没标季的文件都转，明确排除别的季。
 
-    订阅名写死了季（「黑镜 S05」）时用它当任务 pattern：QASx 的 pattern
-    同时是筛选条件，匹配不到的文件不转存。这样「黑镜七季全」这种合集分享
-    只会转存第 5 季，不会把别的季一起下进来。
+    同一个分享里经常混着两种写法（真机幻视任务：`E01~E06` 裸集数 +
+    `S01E07`），只认一种就会漏掉另外几集。这里在通用规则前面加一条
+    「不许出现别的季」的前瞻，本季标记可有可无。
     """
-    return (
-        rf".*?[Ss]0?{season}(?!\d)\s*[\.\-_ ]*\s*(?:[Ee][Pp]?)?\s*(\d{{1,3}})(?![\dA-Za-z]).*?\."
-        + EXT_GROUP,
-        rf"S{season:02d}E\1.\2",
-    )
+    other = rf"[Ss]0?(?!0?{season}(?!\d))\d{{1,2}}(?!\d)"
+    pattern, replace = rename_rules(season, keep_season_in_name=False)
+    return rf"^(?!.*{other})" + pattern, replace
 
 
 # ---------------------------------------------------------------------------

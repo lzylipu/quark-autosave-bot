@@ -328,7 +328,10 @@ async def test_flow_counts_only_episodes_the_pattern_will_transfer():
     assert len(client.added) == 1
     assert "新增 E01~E05（5 集）" in report
     assert "S02" not in report  # 第二季不参与
-    assert client.added[0].replace == "S01E\\1.\\2"
+    # 命名规则换成「本季标记可有可无」的版本，捕获组整体后移，落到 S01E05.mkv
+    assert re.sub(client.added[0].pattern, client.added[0].replace,
+                  "Marshals.S01E05.1080p.mkv") == "S01E05.mkv"
+    assert not re.search(client.added[0].pattern, "Marshals.S02E04.2160p.mkv")
 
 
 async def test_flow_skips_share_missing_a_pending_episode():

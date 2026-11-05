@@ -30,7 +30,7 @@ class ReadOnlyClient:
 
     def __init__(self, real: QASClient, local=None):
         self.real = real
-        self.local = local or []
+        self.local = local  # None = 真读网盘保存目录（要验「本地已有几集」必须真读）
         self.added = []
         self.deleted = []
 
@@ -41,7 +41,9 @@ class ReadOnlyClient:
         return await self.real.get_share_files(shareurl, max_depth, max_dirs)
 
     async def list_savepath_files(self, savepath):
-        return self.local
+        if self.local is not None:
+            return self.local
+        return await self.real.list_savepath_files(savepath)
 
     async def add_task(self, task):
         self.added.append(task)

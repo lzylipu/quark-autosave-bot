@@ -20,6 +20,7 @@ from nonebot_plugin_quark_autosave.subscribe import (
     parse_season,
     pick_best,
     rename_rules,
+    season_or_bare_rules,
     seconds_until,
     split_season,
     video_names_from_dir,
@@ -122,6 +123,23 @@ class TestRenameRules:
     def test_season_two(self):
         assert self._apply("庆余年.01.mkv", season=2) == "S02E01.mkv"
         assert self._apply("庆余年.S02E07.mkv", season=2) == "S02E07.mkv"
+
+    def test_season_or_bare_mixes_both_styles(self):
+        """同一个分享里 `S01E07` 和裸 `E06` 混着写时两种都要转。
+
+        真机：幻视任务 7 集分享里 E01~E06 是裸集数、E07 带季标记，
+        旧规则只认一种 → 只转存了 1 集，报「新增 E07」。
+        """
+        pattern, replace = season_or_bare_rules(1)
+        for name, want in (
+            ("幻视任务.S01E07.4K.mkv", "S01E07.mkv"),
+            ("幻视任务.E06.4K.mkv", "S01E06.mkv"),
+            ("01.mkv", "S01E01.mkv"),
+        ):
+            assert re.sub(pattern, replace, name) == want
+        # 别的季一个都不许碰
+        for name in ("Marshals.S02E04.2160p.mkv", "S07E01.mkv"):
+            assert not re.search(pattern, name)
 
     def test_rename_forces_season_prefix(self):
         pattern, replace = rename_rules(1)

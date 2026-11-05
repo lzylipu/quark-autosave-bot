@@ -199,6 +199,13 @@ class QASClient:
                 if depth == 0:
                     logger.info(f"保存目录 {path} 不存在: {(data or {}).get('error')}")
                 continue
+            # QASx 对不存在的路径会静默回退到能解析的最深一级（传 /自动/某剧
+            # 直接返回 /自动 的内容），不校验就会把别的剧的文件算成本剧已有的集
+            want = path.rstrip("/").rsplit("/", 1)[-1]
+            got = [str(p.get("name") or "") for p in (data.get("paths") or [])]
+            if got and got[-1] != want:
+                logger.info(f"保存目录 {path} 不存在（QASx 回退到 {'/'.join(got)}）")
+                continue
             files = data.get("list")
             if not isinstance(files, list):
                 continue
