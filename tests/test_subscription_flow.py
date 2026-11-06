@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 import nonebot_plugin_quark_autosave as plugin
+from nonebot_plugin_quark_autosave.client import ShareNode
 from nonebot_plugin_quark_autosave.model import DetailInfo, FileItem
 
 GB = 1024**3
@@ -22,7 +23,14 @@ def _file(name: str, size: float) -> FileItem:
 
 class FakeClient:
     def __init__(
-        self, local, results, details, output=None, land: Any = "all", records=None
+        self,
+        local,
+        results,
+        details,
+        output=None,
+        land: Any = "all",
+        records=None,
+        nodes=None,
     ):
         self.local = local
         self.results = results
@@ -38,6 +46,18 @@ class FakeClient:
         self.deleted = []
         # 探过详情的分享：早停测试要数「到底探了几个」
         self.probed = []
+        # 分享目录树：{shareurl: [ShareNode, ...]}；不给就是「一层根目录，文件全在根下」
+        self.nodes = nodes or {}
+
+    def _files(self, url):
+        """这条链接（根或 `#/list/share/<fid>` 子目录）下能转存的文件。"""
+        for node in self.nodes.get(url.split("#", 1)[0], []):
+            if node.url == url:
+                return list(node.videos)
+        detail = self.details.get(url)
+        if detail is None:
+            detail = self.details[url.split("#", 1)[0]]
+        return list(detail.file_list)
 
     async def list_savepath_files(self, savepath):
         return self.local
@@ -48,10 +68,16 @@ class FakeClient:
     async def get_share_detail(self, task):
         return self.details[task.shareurl]
 
-    async def get_share_files(self, shareurl, max_depth=3, max_dirs=40):
+    async def get_share_nodes(self, shareurl, max_depth=6, max_dirs=80):
+        self.probed.append(shareurl)
+        if shareurl in self.nodes:
+            return list(self.nodes[shareurl])
+        return [ShareNode(url=shareurl, path="/", depth=0, videos=self._files(shareurl))]
+
+    async def get_share_files(self, shareurl, max_depth=6, max_dirs=80):
         # 真实实现会递归展开子目录；测试里 details 直接给全量文件
         self.probed.append(shareurl)
-        return list(self.details[shareurl].file_list)
+        return self._files(shareurl)
 
     async def history_records(self, task_name, page_size=100):
         return list(self.records)
@@ -69,7 +95,7 @@ class FakeClient:
         if isinstance(spec, dict):
             spec = spec.get(task.shareurl, "all")
         if spec:
-            names = [f.file_name for f in self.details[task.shareurl].file_list]
+            names = [f.file_name for f in self._files(task.shareurl)]
             if spec != "all":
                 names = [n for n in names if any(k in n for k in spec)]
             for name in names:
@@ -577,3 +603,77 @@ def _capture(bucket):
         bucket.append(text)
 
     return _report
+
+
+async def test_flow_picks_clean_version_folder_in_nested_share():
+    """嵌套分享：根目录把两个版本并成一份，只有子目录里是干净的一整套。
+
+    真机：尚公主 一条分享是 `剧名/4K 高码率/…` 和 `剧名/4K 杜比视界/…`。
+    选中根目录 = 每集两份文件，QASx 会把两个版本都转进来（落盘 `S01E07.1.mkv`）。
+    正确做法是把任务链接指到其中一层（`shareurl#/list/share/<fid>`）。
+    """
+    local = [{"file_name": f"S01E{i:02d}.mkv", "dir": False} for i in range(1, 10)]
+    dv = [_file(f"S01E{i:02d}.DV.mkv", 2.5) for i in range(1, 28)]
+    sdr = [_file(f"S01E{i:02d}.SDR.mkv", 2.4) for i in range(1, 28)]
+    url = "https://pan.quark.cn/s/abc"
+    client = FakeClient(
+        local,
+        [{"shareurl": url, "taskname": "尚公主"}],
+        {url: _detail(*(dv + sdr))},
+        nodes={
+            url: [
+                ShareNode(url=url, path="/", depth=0, videos=dv + sdr),
+                ShareNode(
+                    url=f"{url}#/list/share/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    path="/4K DV 60帧",
+                    depth=1,
+                    videos=dv,
+                ),
+                ShareNode(
+                    url=f"{url}#/list/share/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    path="/4K SDR 60帧",
+                    depth=1,
+                    videos=sdr,
+                ),
+            ]
+        },
+    )
+
+    report = await plugin._run_one_subscription(client, "尚公主")
+
+    assert len(client.added) == 1
+    task = client.added[0]
+    # 选中干净的版本目录，而不是把两个版本都并进去的根目录
+    assert task.shareurl.endswith("#/list/share/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    assert "4K DV 60帧" in report
+    # 只补 E10~E27，本地已有的 E01~E09 一个都不许重下
+    assert "E10~E27" in report
+    landed = sorted(f["file_name"] for f in client.local[9:])
+    assert landed == [f"S01E{i:02d}.mkv" for i in range(10, 28)]
+    # 落盘不能出现 .1 副本
+    assert not [n for n in landed if ".1." in n]
+
+
+async def test_flow_transfers_only_missing_episodes():
+    """本地已有的集不许重下：只把缺的那几集交给 QASx。
+
+    真机：尚公主 本地 E01~E09、E16~E27，一条 27 集的分享整份转存会落 18 个文件
+    （只有 8 集是新的），夸克对同名文件追加 `.1`，目录里就开始出现 S01E07.1.mkv。
+    """
+    local = [{"file_name": f"S01E{i:02d}.mp4", "dir": False} for i in list(range(1, 10)) + list(range(16, 28))]
+    before = len(local)
+    share = [_file(f"尚公主.S01E{i:02d}.4K.mkv", 2.2) for i in range(1, 28)]
+    client = FakeClient(
+        local, [{"shareurl": "u1", "taskname": "尚公主"}], {"u1": _detail(*share)}
+    )
+
+    report = await plugin._run_one_subscription(client, "尚公主")
+
+    task = client.added[0]
+    assert "E10~E15" in report
+    # 只有 6 个新文件落地，其余 21 集一次都没碰
+    landed = sorted(f["file_name"] for f in client.local[before:])
+    assert landed == [f"S01E{i:02d}.mkv" for i in range(10, 16)]
+    # 已有的集不会出现在命名规则里
+    for ep in (7, 16, 27):
+        assert not re.search(task.pattern, f"尚公主.S01E{ep:02d}.4K.mkv")

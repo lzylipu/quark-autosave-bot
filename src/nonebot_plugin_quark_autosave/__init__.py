@@ -27,6 +27,7 @@ from .subscribe import (
     SubscriptionStore,
     assess_share,
     episode_keys,
+    episode_limited_rules,
     fmt_episode_keys,
     parse_season,
     pick_best,
@@ -452,44 +453,59 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
     checked = failed = empty = off_season = 0
     candidates: list[Candidate] = []
 
-    async def _probe(idx: int, item: dict) -> tuple[int, Candidate | None, str]:
-        """探一个分享。返回 (序号, 候选, 失败原因)；失败原因空表示成功。"""
+    async def _probe(idx: int, item: dict) -> tuple[int, list[Candidate], str]:
+        """探一个分享。返回 (序号, 候选列表, 失败原因)；失败原因空表示成功。
+
+        候选是**按目录层**给的：嵌套分享里不同版本各占一个子目录，根目录会把
+        它们并成一份（同一集两份文件 → 落盘多一个 `.1` 副本），只有某一层是干净的。
+        所以这里把每层都当候选交出去，谁最合适由 pick_best 判。
+        """
         shareurl = str(item.get("shareurl", "")).strip()
         if not shareurl:
-            return idx, None, ""
+            return idx, [], ""
         try:
-            files = await client.get_share_files(shareurl)
+            nodes = await client.get_share_nodes(shareurl)
         except QASException as exc:
             # 链接失效是常态，换下一个
             logger.info(f"订阅[{name}] 跳过分享 {shareurl}: {exc}")
-            return idx, None, str(exc)
-        # 分享里带季标记、但没有一集属于目标季 → 直接跳过，去看下一条。
-        # 不能选中它：pattern 只认目标季，选中也一集都转不了，白建一轮任务。
-        marks = {
-            parse_season(f.file_name)
-            for f in files
-            if not getattr(f, "dir", False)
-        }
-        marks.discard(None)
-        if marks and season not in marks:
-            logger.info(f"订阅[{name}] 跳过分享 {shareurl}: 是第 {sorted(marks)} 季")
-            return idx, None, f"季:{sorted(m for m in marks if m)}"
+            return idx, [], str(exc)
 
-        cand = _only_season(
-            assess_share(
-                shareurl,
-                files,
-                local_keys,
-                plugin_config.sub_min_size_gb,
-                plugin_config.sub_max_size_gb,
+        cands: list[Candidate] = []
+        off_season = False
+        for node in nodes:
+            videos = [f for f in node.videos if not getattr(f, "dir", False)]
+            if not videos:
+                continue
+            # 这一层里带季标记、但没有一集属于目标季 → 跳过这一层。
+            # 不能选中它：pattern 只认目标季，选中也一集都转不了，白建一轮任务。
+            marks = {parse_season(f.file_name) for f in videos}
+            marks.discard(None)
+            if marks and season not in marks:
+                off_season = True
+                continue
+            cand = _only_season(
+                assess_share(
+                    node.url,
+                    videos,
+                    local_keys,
+                    plugin_config.sub_min_size_gb,
+                    plugin_config.sub_max_size_gb,
+                    season,
+                    title,
+                    str(item.get("taskname") or ""),
+                    path=node.path,
+                    depth=node.depth,
+                ),
                 season,
-                title,
-                str(item.get("taskname") or ""),
-            ),
-            season,
-            only_season,
-        )
-        return idx, cand, ""
+                only_season,
+            )
+            cands.append(cand)
+        if not cands:
+            if off_season:
+                logger.info(f"订阅[{name}] 跳过分享 {shareurl}: 是别的季")
+                return idx, [], "季:off_season"
+            return idx, [], ""
+        return idx, cands, ""
 
     scan_pos = 0
 
@@ -505,26 +521,32 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
             probed = await asyncio.gather(
                 *(_probe(start + i, item) for i, item in enumerate(batch))
             )
-            for _idx, cand, err in sorted(probed, key=lambda x: x[0]):
-                if err or cand is None:
-                    if err:
-                        if err.startswith("季:"):
-                            off_season += 1
-                        else:
-                            failed += 1
+            for _idx, cands, err in sorted(probed, key=lambda x: x[0]):
+                if err:
+                    if err.startswith("季:"):
+                        off_season += 1
+                    else:
+                        failed += 1
+                    continue
+                if not cands:
                     continue
                 checked += 1
-                if not cand.video_files:
+                if not any(c.video_files for c in cands):
                     empty += 1
                     continue
-                candidates.append(cand)
-            # 合格 = 片名对得上 + 大小在区间 + 有可补的集 + 这几集它全都给了。
+                candidates.extend(cands)
+            # 合格 = 片名对得上 + 大小在区间 + 有可补的集 + 这几集它全都给了
+            #        + 同一集只有一份文件（否则整份分享会把已有集再转一遍）。
             # 少一集就算不合格：本地 E01~E10、分享只有 E12 时，选中它 E11 就永久跳过
             # （用户实测的原话：「那 11 就有，没有 11 你这样再去下，他就错过了」）。
             usable = [
                 c
                 for c in candidates
-                if c.title_hit and c.size_ok and c.new_episodes and not c.missing
+                if c.title_hit
+                and c.size_ok
+                and c.new_episodes
+                and not c.missing
+                and not c.dup_episodes
             ]
             if max_ok > 0 and len(usable) >= max_ok:
                 logger.info(
@@ -600,12 +622,14 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
         task = TaskItem.simple_from_title(title, best.shareurl)
         task.taskname = sanitize_title(title)
         task.savepath = savepath
-        # 本季标记可有可无：`S01E07` 和裸 `E06` 在同一个分享里是常态，只认一种
-        # 就会漏集（真机幻视任务：7 集只转了 E07）。别的季一律不碰。
-        task.pattern, task.replace = season_or_bare_rules(season)
-        # pattern 同时是 QASx 的筛选条件：匹配不上文件名不转存。所以「新增几集」
-        # 只能算真正会被转存的那几集——合集里既有 S02E05 又有 E01 时，E01 会被跳过
-        # （真机：法警小队 报「新增 15 集」，落盘只有 3 个）。
+        # 只转本地缺的那几集：pattern 同时是 QASx 的筛选条件，把集数收窄成白名单，
+        # 已有集一个都不会被再转一遍（不收窄时 27 集的分享会把已有的集全重下，
+        # 夸克遇同名就存成 S01E07.1.mkv，目录越攒越乱）。
+        wanted_eps = sorted({ep for _s, ep in best.new_episodes if _s == season})
+        if not wanted_eps:
+            best, fallback = await _next(set(tried))
+            continue
+        task.pattern, task.replace = episode_limited_rules(season, wanted_eps)
         transferable = [n for n in best.video_files if re.search(task.pattern, n)]
         if not transferable:
             logger.info(
@@ -621,7 +645,10 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
         task.addition = {}
 
         new_desc = f"新增 {fmt_episode_keys(transfer_keys)}（{len(transfer_keys)} 集）"
-        logger.info(f"订阅[{name}] 选中 {best.shareurl} {new_desc}")
+        logger.info(
+            f"订阅[{name}] 选中 {best.shareurl}（{best.path}）{new_desc}"
+            f"，只转这 {len(transfer_keys)} 集"
+        )
         try:
             await client.add_task(task)
         except QASException as exc:
@@ -661,6 +688,10 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
         # 「没有新文件」时不能再说「新增了哪些集」——那句预测和实际结果会互相打架
         detail = f"{local_desc} → {new_desc}" if landed else local_desc
         lines = [head, f"　　{detail}"]
+        if best.path not in ("/", ""):
+            lines.append(f"　　ℹ️ 用的是分享里的「{best.path.lstrip('/')}」目录（那一层版本最全）")
+        if landed:
+            lines.append(f"　　ℹ️ 只转这 {len(transfer_keys)} 集，本地已有的集不会再下")
         if cleared:
             lines.append(f"　　ℹ️ 清掉 {cleared} 条过期转存记录（本地已没有这些集）")
         if not landed:

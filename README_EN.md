@@ -327,6 +327,13 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 
 ## 📝 Changelog
 
+### v0.5.4
+
+- 📂 **Nested shares are selected per folder level**: `#/list/share/<fid>` folders are fully expanded and assessed independently. When the root combines several quality variants, the bot selects a complete child folder with one file per episode instead of transferring the flattened tree
+- 🎯 **Only genuinely missing episodes are transferred**: the QASx task `pattern` is narrowed to an episode allowlist, so episodes already stored locally are not downloaded again and duplicates such as `S01E07.1.mkv` are avoided
+- 🧩 **Existing nested share URLs remain expandable**: a search result already pointing to `https://pan.quark.cn/s/...#/list/share/<fid>` can still be scanned for deeper folders
+- 🧪 Added regression coverage for nested quality variants, nested-URL entry points and missing-episode-only transfers, 148 passed
+
 ### v0.5.3
 
 - 🐞 **"No new files to transfer" no longer means nothing happened**: QASx dedupes on `file_id + task name`, so once the cloud files are deleted while the transfer records remain, that show can never be downloaded again (real case: all 11 episodes of a show were in the records while its folder was empty — every run answered "no new files")

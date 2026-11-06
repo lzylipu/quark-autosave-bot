@@ -13,6 +13,7 @@ from nonebot_plugin_quark_autosave.subscribe import (
     assess_share,
     check_share,
     episode_keys,
+    episode_limited_rules,
     episodes_of,
     fmt_episode_keys,
     fmt_episodes,
@@ -134,7 +135,7 @@ class TestRenameRules:
         for name, want in (
             ("幻视任务.S01E07.4K.mkv", "S01E07.mkv"),
             ("幻视任务.E06.4K.mkv", "S01E06.mkv"),
-            ("01.mkv", "S01E01.mkv"),
+            ("10.mkv", "S01E10.mkv"),
         ):
             assert re.sub(pattern, replace, name) == want
         # 别的季一个都不许碰
@@ -146,6 +147,40 @@ class TestRenameRules:
         assert pattern
         assert replace == "S01E\\2.\\3"
         assert rename_rules(2)[1] == "S02E\\2.\\3"
+
+    def test_episode_limited_only_transfers_wanted_episodes(self):
+        """只转缺的那几集：本地已有的集不许再被转一遍（否则落盘出 `.1` 副本）。
+
+        真机：尚公主 本地已有 E01~E09、E16~E27，分享里 27 集齐全，
+        整份转存会把已有的 21 集再下一遍，夸克存成 `S01E07.1.mkv`。
+        """
+        pattern, replace = episode_limited_rules(1, [10, 11, 12, 15])
+        for name, want in (
+            ("S01E10.mkv", "S01E10.mkv"),
+            ("S01E11.4K.mp4", "S01E11.mp4"),
+            ("11 4K.mkv", "S01E11.mkv"),
+            ("第11集.mp4", "S01E11.mp4"),
+            ("[11].mkv", "S01E11.mkv"),
+            ("11.mkv", "S01E11.mkv"),
+            ("10.mkv", "S01E10.mkv"),
+            ("S01E15.1080P.mp4", "S01E15.mp4"),
+        ):
+            assert re.sub(pattern, replace, name) == want
+        # 两位补零的裸编号（`01.mkv`）仍按原样改名，不能把零吃掉
+        pad, pad_replace = episode_limited_rules(1, [1, 2])
+        assert re.sub(pad, pad_replace, "01.mkv") == "S01E01.mkv"
+        assert re.sub(pad, pad_replace, "02.mkv") == "S01E02.mkv"
+        # 已有的集、别的季、分辨率数字一个都不许命中
+        for name in (
+            "S01E09.mkv",
+            "S01E13.mkv",
+            "S01E16.mkv",
+            "S02E11.mkv",
+            "S01E110.mkv",
+            "1080p.mkv",
+            "2160p.mkv",
+        ):
+            assert not re.search(pattern, name), name
 
 
 class TestEpisodes:

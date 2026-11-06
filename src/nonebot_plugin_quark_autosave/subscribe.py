@@ -266,6 +266,27 @@ def season_or_bare_rules(season: int) -> tuple[str, str]:
     return rf"^(?!.*{other})" + pattern, replace
 
 
+def episode_limited_rules(season: int, episodes: Iterable[int]) -> tuple[str, str]:
+    """只转指定的那几集：本地已经有的集一个都不碰。
+
+    为什么需要它：QASx 转存是「整份分享」——`pattern` 既是命名规则、又是筛选条件，
+    把集数这一段收窄成白名单，QASx 就只转这几集。不收窄的话，一条 27 集的分享
+    会把本地早就有的 21 集再转一遍，夸克遇到同名文件就存成 `S01E07.1.mkv`，
+    目录里越攒越乱（真机就是 18 个文件落进来、只新增了 8 集）。
+
+    组号与 TV_PATTERN 保持一致（1=季、2=集、3=扩展名），`replace` 不用改。
+    """
+    alt = "|".join(sorted({str(int(e)) for e in episodes}, key=lambda s: (-len(s), s)))
+    other = rf"[Ss]0?(?!0?{season}(?!\d))\d{{1,2}}(?!\d)"
+    pattern = (
+        rf"^(?!.*{other})"
+        rf"(?:.*?([Ss]\d{{1,2}})?(?:[第EePpXx\.\-_\(\[]|\s){{1,2}}|^)"
+        # 0* 必须在捕获组里：`05.mkv` 要落成 S01E05.mkv，不能在替换时把零吃掉
+        rf"(0*(?:{alt}))(?![\dA-Za-z]).*?\." + EXT_GROUP
+    )
+    return pattern, f"S{season:02d}E\\2.\\3"
+
+
 # ---------------------------------------------------------------------------
 # 集数识别
 # ---------------------------------------------------------------------------
@@ -420,6 +441,10 @@ class Candidate:
     # 同一集在分享里出现两次的文件（如 S01E07.mkv + 07.mkv）：QASx 按文件名查重时
     # 认不出它们是一集，会各落一份，落盘名也就统一不了。只做提示，不当不合格。
     dup_episodes: set = field(default_factory=set)
+    # 这条候选对应分享里的哪一层目录（根目录是 "/"）。嵌套分享常把不同版本
+    # 各放一个子目录，只有某个子目录里的内容是全的 —— 那就直接把任务指到那一层。
+    path: str = "/"
+    depth: int = 0
 
 
 def video_median_gb(files) -> float:
@@ -499,8 +524,10 @@ def assess_share(
     season: int = 1,
     title: str = "",
     share_title: str = "",
+    path: str = "/",
+    depth: int = 0,
 ) -> Candidate:
-    """评估一个分享：大小是否合格 + 能补多少新集（按「季-集」比）。"""
+    """评估一个分享（或分享里某一层目录）：大小是否合格 + 能补多少新集。"""
     size_ok, note = check_share(files, min_gb, max_gb)
     names = video_names_from_share(files)
     share_keys = episode_keys(names, season)
@@ -522,6 +549,8 @@ def assess_share(
         title_hit=hit,
         missing=missing_episodes(share_keys, local_keys),
         dup_episodes=duplicate_episodes(names, season),
+        path=path,
+        depth=depth,
     )
 
 
@@ -536,9 +565,16 @@ def pick_best(
     ]
     if not usable:
         return None
-    # 整份覆盖优先：缺集的分享会把漏掉的那几集永久跳过（实测「只有 E12」的
-    # 更新包被选中，E11 再也没补上）。同档再比能补多少集，最后取先搜到的。
-    return max(usable, key=lambda c: (not c.missing, len(c.new_episodes)))
+    # 排序理由（从重要到次要）：
+    # 1) 整份覆盖：缺集的分享会把漏掉的那几集永久跳过（实测「只有 E12」的
+    #    更新包被选中，E11 再也没补上）。
+    # 2) 同一集只有一份文件：嵌套分享的根目录会把「4K 高码率」「4K 杜比视界」
+    #    两个版本并成一份，选中它每集都会多落一个 `.1` 副本（真机）。
+    # 3) 能补的集数多；4) 目录层数浅（同样的内容优先用根目录，少建子目录）。
+    return max(
+        usable,
+        key=lambda c: (not c.missing, not c.dup_episodes, len(c.new_episodes), -c.depth),
+    )
 
 
 def seconds_until(hhmm: str, now: datetime | None = None) -> float:

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import weakref
+from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 import httpx
@@ -44,6 +45,20 @@ def _config_lock() -> asyncio.Lock:
         lock = asyncio.Lock()
         _config_locks[loop] = lock
     return lock
+
+
+@dataclass
+class ShareNode:
+    """分享里的一层目录（根目录也是节点）。
+
+    `videos` 是这一层**连同更深子目录**收集到的全部文件——因为建任务时
+    `update_subdir=".*"` 会递归转存，判断「这一层能不能补齐」必须看整棵子树。
+    """
+
+    url: str
+    path: str = "/"
+    depth: int = 0
+    videos: list[FileItem] = field(default_factory=list)
 
 
 def _sanitize_tasklist(payload: dict[str, Any]) -> None:
@@ -223,34 +238,83 @@ class QASClient:
                     collected.append(item)
         return collected
 
-    async def get_share_files(
-        self, shareurl: str, max_depth: int = 3, max_dirs: int = 40
-    ) -> list[FileItem]:
-        """取分享里的**全部文件**，自动递归展开子目录。
+    async def get_share_nodes(
+        self, shareurl: str, max_depth: int = 6, max_dirs: int = 80
+    ) -> list[ShareNode]:
+        """把分享展开成「一层目录一个候选」，每层带上它子树里的全部视频文件。
 
-        实测：分享根目录经常只是一个文件夹（`dir=True`, `size=0`），
-        `/get_share_detail` 只返回当前层。子目录靠 `shareurl#/list/share/<fid>`
-        展开——这是 QASx 的 `extract_url` 支持的写法，已对真实实例验证过。
+        为什么要分层而不是拍平：嵌套分享常把不同版本各放一个子目录
+        （`剧名/4K 高码率/…` 和 `剧名/4K 杜比视界/…`），拍平之后同一集出现两次，
+        QASx 会把两个版本都转进来，夸克生成 `S01E07.1.mkv` 这种副本。
+        分层之后可以只挑「缺的集全有、且每集只有一份」的那一层，并把任务链接
+        直接指到那一层（`shareurl#/list/share/<fid>`，QASx 的 extract_url 认这个写法），
+        子目录里更深的内容仍由 `update_subdir` 递归转存。
         """
         base = shareurl.split("#", 1)[0]
-        collect: list[FileItem] = []
-        queue: list[tuple[str, int]] = [(shareurl, 0)]
+        nodes: list[ShareNode] = []
+        parents: list[int | None] = []
+        queue: list[tuple[str, str, int, int | None]] = [(shareurl, "/", 0, None)]
         seen_fids: set[str] = set()
         expanded = 0
 
         while queue:
-            url, depth = queue.pop(0)
-            detail = await self.get_share_detail(TaskItem.simple_from_title("probe", url))
+            url, path, depth, parent = queue.pop(0)
+            detail = await self.get_share_detail(
+                TaskItem.simple_from_title("probe", url)
+            )
+            index = len(nodes)
+            nodes.append(
+                ShareNode(
+                    url=url,
+                    path=path,
+                    depth=depth,
+                    videos=[item for item in detail.file_list if not item.dir],
+                )
+            )
+            parents.append(parent)
             for item in detail.file_list:
-                if item.dir:
-                    if depth >= max_depth or expanded >= max_dirs or item.fid in seen_fids:
-                        continue
-                    seen_fids.add(item.fid)
-                    expanded += 1
-                    queue.append((f"{base}#/list/share/{item.fid}", depth + 1))
-                else:
-                    collect.append(item)
-        return collect
+                if not item.dir:
+                    continue
+                if depth >= max_depth or expanded >= max_dirs or item.fid in seen_fids:
+                    continue
+                seen_fids.add(item.fid)
+                expanded += 1
+                child_path = f"{path.rstrip('/')}/{item.file_name}"
+                queue.append(
+                    (
+                        f"{base}#/list/share/{item.fid}",
+                        child_path or "/",
+                        depth + 1,
+                        index,
+                    )
+                )
+
+        # 子树汇总：倒着并（BFS 保证父节点下标小于子节点），父层看到的是全部视频
+        for index in range(len(nodes) - 1, -1, -1):
+            parent = parents[index]
+            if parent is not None:
+                nodes[parent].videos.extend(nodes[index].videos)
+        return nodes
+
+    async def get_share_files(
+        self, shareurl: str, max_depth: int = 6, max_dirs: int = 80
+    ) -> list[FileItem]:
+        """取分享里的**全部文件**（拍平），自动递归展开子目录。
+
+        实测：分享根目录经常只是一个文件夹（`dir=True`, `size=0`），
+        `/get_share_detail` 只返回当前层。子目录靠 `shareurl#/list/share/<fid>`
+        展开——这是 QASx 的 `extract_url` 支持的写法，已对真实实例验证过。
+
+        订阅选源用 `get_share_nodes()`（要分层），这里给「只看总量」的场景用。
+        """
+        files: list[FileItem] = []
+        for node in await self.get_share_nodes(shareurl, max_depth, max_dirs):
+            files.extend(node.videos)
+        # 同一个文件在父层和子层各出现一次，按 fid 去重
+        unique: dict[str, FileItem] = {}
+        for item in files:
+            unique.setdefault(item.fid, item)
+        return list(unique.values())
 
     async def get_data(self) -> AutosaveData:
         response = await self._request_with_retry("GET", "/data")

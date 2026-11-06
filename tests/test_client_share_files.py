@@ -96,3 +96,72 @@ async def test_expired_nested_link_propagates():
     c = FakeDetailClient(tree)
     with pytest.raises(QASException):
         await c.get_share_files(BASE)
+
+
+async def test_share_nodes_expose_each_nested_folder_as_candidate():
+    tree = {
+        BASE: _detail(
+            [
+                _file("4K DV", "dv", dir_=True),
+                _file("4K SDR", "sdr", dir_=True),
+            ]
+        ),
+        f"{BASE}#/list/share/dv": _detail(
+            [
+                _file("S01E01.DV.mkv", "dv1", 2**30),
+                _file("S01E02.DV.mkv", "dv2", 2**30),
+            ]
+        ),
+        f"{BASE}#/list/share/sdr": _detail(
+            [
+                _file("S01E01.SDR.mkv", "sdr1", 2**30),
+                _file("S01E02.SDR.mkv", "sdr2", 2**30),
+            ]
+        ),
+    }
+    c = FakeDetailClient(tree)
+
+    nodes = await c.get_share_nodes(BASE)
+
+    assert [(node.path, node.depth) for node in nodes] == [
+        ("/", 0),
+        ("/4K DV", 1),
+        ("/4K SDR", 1),
+    ]
+    assert sorted(f.file_name for f in nodes[0].videos) == [
+        "S01E01.DV.mkv",
+        "S01E01.SDR.mkv",
+        "S01E02.DV.mkv",
+        "S01E02.SDR.mkv",
+    ]
+    assert [f.file_name for f in nodes[1].videos] == [
+        "S01E01.DV.mkv",
+        "S01E02.DV.mkv",
+    ]
+    assert nodes[1].url == f"{BASE}#/list/share/dv"
+
+
+async def test_share_nodes_can_start_from_an_existing_nested_url():
+    nested = f"{BASE}#/list/share/d1"
+    tree = {
+        nested: _detail(
+            [
+                _file("版本 A", "d2", dir_=True),
+                _file("S01E01.mkv", "v1", 2**30),
+            ]
+        ),
+        f"{BASE}#/list/share/d2": _detail(
+            [_file("S01E02.mkv", "v2", 2**30)]
+        ),
+    }
+    c = FakeDetailClient(tree)
+
+    nodes = await c.get_share_nodes(nested)
+
+    assert nodes[0].url == nested
+    assert [f.file_name for f in nodes[0].videos] == [
+        "S01E01.mkv",
+        "S01E02.mkv",
+    ]
+    assert nodes[1].url == f"{BASE}#/list/share/d2"
+    assert nodes[1].path == "/版本 A"
