@@ -53,11 +53,18 @@ class ShareNode:
 
     `videos` 是这一层**连同更深子目录**收集到的全部文件——因为建任务时
     `update_subdir=".*"` 会递归转存，判断「这一层能不能补齐」必须看整棵子树。
+
+    `direct` 是**直接躺在这一层**的文件（不含子目录）。选源只信它：QASx 遇到
+    子目录时会递归转存，落在 `保存目录/<分享里的子目录>/` 下，而子目录里的
+    查重是拿子目录自己的列表比的——本地明明已经有 E16~E26，它照样整批再落一份
+    （真机：/自动/尚公主 顶层 27 集，下面又多了「4K DV 60帧」11 集 + 「4K SDR 60帧」5 集）。
+    所以能选「视频就躺在这一层」的目录就选它，别去选要靠递归的那个父目录。
     """
 
     url: str
     path: str = "/"
     depth: int = 0
+    direct: list[FileItem] = field(default_factory=list)
     videos: list[FileItem] = field(default_factory=list)
 
 
@@ -263,12 +270,14 @@ class QASClient:
                 TaskItem.simple_from_title("probe", url)
             )
             index = len(nodes)
+            direct = [item for item in detail.file_list if not item.dir]
             nodes.append(
                 ShareNode(
                     url=url,
                     path=path,
                     depth=depth,
-                    videos=[item for item in detail.file_list if not item.dir],
+                    direct=direct,
+                    videos=list(direct),
                 )
             )
             parents.append(parent)

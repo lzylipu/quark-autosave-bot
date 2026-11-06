@@ -473,33 +473,46 @@ async def _run_one_subscription(client: QASClient, name: str) -> str:
         cands: list[Candidate] = []
         off_season = False
         for node in nodes:
-            videos = [f for f in node.videos if not getattr(f, "dir", False)]
-            if not videos:
-                continue
-            # 这一层里带季标记、但没有一集属于目标季 → 跳过这一层。
-            # 不能选中它：pattern 只认目标季，选中也一集都转不了，白建一轮任务。
-            marks = {parse_season(f.file_name) for f in videos}
-            marks.discard(None)
-            if marks and season not in marks:
-                off_season = True
-                continue
-            cand = _only_season(
-                assess_share(
-                    node.url,
-                    videos,
-                    local_keys,
-                    plugin_config.sub_min_size_gb,
-                    plugin_config.sub_max_size_gb,
-                    season,
-                    title,
-                    str(item.get("taskname") or ""),
-                    path=node.path,
-                    depth=node.depth,
-                ),
-                season,
-                only_season,
-            )
-            cands.append(cand)
+            # 优先只看「直接躺在这层」的文件：QASx 递归进子目录转存时，子目录里的
+            # 查重是拿子目录自己的列表比的，本地已有的集会整批再落一份（真机
+            # /自动/尚公主 顶层 27 集，下面又多了「4K DV 60帧」11 集）。
+            direct = [f for f in node.direct if not getattr(f, "dir", False)]
+            subtree = [f for f in node.videos if not getattr(f, "dir", False)]
+            # 有直系文件就只按直系文件评估；纯容器目录（只有子文件夹）才退回看子树，
+            # 否则那条「靠递归补全」的候选会把重复文件带进来。
+            for videos, is_direct in ((direct, True), (subtree, False)):
+                if not videos:
+                    continue
+                # 本层已经有直系文件 → 不再按子树评估（子树必然含这些文件，
+                # 等于重复候选）；叶子目录的子树和直系文件是同一份，也跳过。
+                if not is_direct and (direct or len(subtree) == len(direct)):
+                    continue
+                # 这一层里带季标记、但没有一集属于目标季 → 跳过这一层。
+                # 不能选中它：pattern 只认目标季，选中也一集都转不了，白建一轮任务。
+                marks = {parse_season(f.file_name) for f in videos}
+                marks.discard(None)
+                if marks and season not in marks:
+                    off_season = True
+                    continue
+                cands.append(
+                    _only_season(
+                        assess_share(
+                            node.url,
+                            videos,
+                            local_keys,
+                            plugin_config.sub_min_size_gb,
+                            plugin_config.sub_max_size_gb,
+                            season,
+                            title,
+                            str(item.get("taskname") or ""),
+                            path=node.path,
+                            depth=node.depth,
+                            direct=is_direct,
+                        ),
+                        season,
+                        only_season,
+                    )
+                )
         if not cands:
             if off_season:
                 logger.info(f"订阅[{name}] 跳过分享 {shareurl}: 是别的季")

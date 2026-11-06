@@ -327,6 +327,14 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 
 ## 📝 Changelog
 
+### v0.5.5
+
+- 🗂 **Only folders holding the videos themselves are selected**: a nested share's root often contains nothing but version folders. Pointing a task at that root makes QASx recurse into the subfolders, and its dedupe inside a subfolder only compares against that subfolder — so episodes already stored locally get copied again (measured on a live instance: 27 episodes at the top level of one show, plus 11 more under `4K DV 60帧` and 5 under `4K SDR 60帧`). Candidates are now scored on each folder's own files and the task points at the folder that really holds the videos
+- 🎯 **Exactly one file per episode**: transferring a whole share re-downloads episodes already present, and Quark appends `.1` to duplicate names; the task pattern is narrowed to the episodes actually missing, so existing files are never touched again
+- 🔁 **The share that can complete the missing episodes wins**: a share covering every missing episode is preferred; when none does, the best partial one is transferred and the rest is left to the next round or the next share — never dumping the entire parent directory just to transfer everything at once
+- ⬇️ **Subtree fallback only for hollow folders**: if no layer exposes direct files and content lives deeper, the subtree is still expanded — a folder with no files is never a reason to give up
+- 🧪 3 new regressions (hollow root picks the child folder / nested variants already local are not re-downloaded / hollow-only share falls back to the subtree), 151 passed
+
 ### v0.5.4
 
 - 📂 **Nested shares are selected per folder level**: `#/list/share/<fid>` folders are fully expanded and assessed independently. When the root combines several quality variants, the bot selects a complete child folder with one file per episode instead of transferring the flattened tree

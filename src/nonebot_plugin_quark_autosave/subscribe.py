@@ -445,6 +445,10 @@ class Candidate:
     # 各放一个子目录，只有某个子目录里的内容是全的 —— 那就直接把任务指到那一层。
     path: str = "/"
     depth: int = 0
+    # 视频是不是**直接躺在这层目录里**（而不是要靠 QASx 递归进子目录才拿得到）。
+    # 只有 direct 的候选才能真的「只补缺集」：QASx 递归进子目录时，子目录里的
+    # 查重是拿子目录自己的列表比的，本地已有的集会被整批再落一份。
+    direct: bool = False
 
 
 def video_median_gb(files) -> float:
@@ -526,6 +530,7 @@ def assess_share(
     share_title: str = "",
     path: str = "/",
     depth: int = 0,
+    direct: bool = False,
 ) -> Candidate:
     """评估一个分享（或分享里某一层目录）：大小是否合格 + 能补多少新集。"""
     size_ok, note = check_share(files, min_gb, max_gb)
@@ -551,6 +556,7 @@ def assess_share(
         dup_episodes=duplicate_episodes(names, season),
         path=path,
         depth=depth,
+        direct=direct,
     )
 
 
@@ -568,12 +574,19 @@ def pick_best(
     # 排序理由（从重要到次要）：
     # 1) 整份覆盖：缺集的分享会把漏掉的那几集永久跳过（实测「只有 E12」的
     #    更新包被选中，E11 再也没补上）。
-    # 2) 同一集只有一份文件：嵌套分享的根目录会把「4K 高码率」「4K 杜比视界」
-    #    两个版本并成一份，选中它每集都会多落一个 `.1` 副本（真机）。
-    # 3) 能补的集数多；4) 目录层数浅（同样的内容优先用根目录，少建子目录）。
+    # 2) 视频就在这一层：靠递归子目录的候选会把本地已有的集在子目录里再落一份
+    #    （真机：/自动/尚公主 顶层 27 集，子目录又多了「4K DV 60帧」11 集）。
+    # 3) 同一集只有一份文件：同一层里两版并存时每集都会多落一份。
+    # 4) 能补的集数多；5) 目录层数浅（同样的内容优先用根目录，少建子目录）。
     return max(
         usable,
-        key=lambda c: (not c.missing, not c.dup_episodes, len(c.new_episodes), -c.depth),
+        key=lambda c: (
+            not c.missing,
+            c.direct,
+            not c.dup_episodes,
+            len(c.new_episodes),
+            -c.depth,
+        ),
     )
 
 

@@ -71,8 +71,15 @@ class FakeClient:
     async def get_share_nodes(self, shareurl, max_depth=6, max_dirs=80):
         self.probed.append(shareurl)
         if shareurl in self.nodes:
-            return list(self.nodes[shareurl])
-        return [ShareNode(url=shareurl, path="/", depth=0, videos=self._files(shareurl))]
+            nodes = []
+            for node in self.nodes[shareurl]:
+                # 真实实现里 direct 是「这一层自己的文件」，没显式给就当成视频都在本层
+                if not node.direct:
+                    node.direct = list(node.videos)
+                nodes.append(node)
+            return nodes
+        files = self._files(shareurl)
+        return [ShareNode(url=shareurl, path="/", depth=0, direct=list(files), videos=list(files))]
 
     async def get_share_files(self, shareurl, max_depth=6, max_dirs=80):
         # 真实实现会递归展开子目录；测试里 details 直接给全量文件
@@ -677,3 +684,122 @@ async def test_flow_transfers_only_missing_episodes():
     # 已有的集不会出现在命名规则里
     for ep in (7, 16, 27):
         assert not re.search(task.pattern, f"尚公主.S01E{ep:02d}.4K.mkv")
+
+
+async def test_flow_skips_container_root_and_uses_folder_with_the_videos():
+    """真机：分享根目录里一个视频都没有，全是子文件夹；视频躺在某一层子目录里。
+
+    老逻辑把任务指到根目录，靠 QASx 自己递归——它递归进子目录后是按**子目录里
+    的文件列表**查重的，本地已有的集照样整批再落一份（/自动/尚公主 顶层 27 集，
+    下面又多了「4K DV 60帧」11 集）。所以选源必须选中「视频就在这一层」的目录，
+    并把这个目录的链接（shareurl#/list/share/<fid>）交给 QASx。
+    """
+    local = [{"file_name": f"S01E{i:02d}.mkv", "dir": False} for i in range(1, 10)]
+    before = len(local)
+    full = [_file(f"S01E{i:02d}.mkv", 2.5) for i in range(1, 13)]
+    junk = [_file(f"S01E{i:02d}.sample.mkv", 0.2) for i in range(1, 4)]
+    url = "https://pan.quark.cn/s/nested"
+    inner = f"{url}#/list/share/cccccccccccccccccccccccccccccccc"
+
+    client = FakeClient(
+        local,
+        [{"shareurl": url, "taskname": "尚公主"}],
+        {url: _detail(*(full + junk))},
+        nodes={
+            url: [
+                # 纯容器：这一层没有视频，只有两个子目录
+                ShareNode(url=url, path="/", depth=0, direct=[], videos=full + junk),
+                ShareNode(url=inner, path="/4K 完整版", depth=1, direct=full, videos=full),
+                ShareNode(
+                    url=f"{url}#/list/share/dddddddddddddddddddddddddddddddd",
+                    path="/预告",
+                    depth=1,
+                    direct=junk,
+                    videos=junk,
+                ),
+            ]
+        },
+    )
+
+    report = await plugin._run_one_subscription(client, "尚公主")
+
+    task = client.added[0]
+    # 必须指到「视频就在这一层」的子目录，而不是空壳根目录
+    assert task.shareurl == inner
+    assert "4K 完整版" in report
+    # 只补 E10~E12，本地 E01~E09 一个都不重下
+    assert "E10~E12" in report
+    landed = sorted(f["file_name"] for f in client.local[before:])
+    assert landed == [f"S01E{i:02d}.mkv" for i in range(10, 13)]
+
+
+async def test_flow_does_not_redownload_when_nested_versions_are_all_local():
+    """真机复现：本地 E01~E27 都在，分享是「同一批集放在两个画质子目录里」。
+
+    老逻辑选中根目录 → QASx 递归进子目录 → 子目录里按自己的列表查重 → 11 集
+    再落一遍到 /自动/尚公主/4K DV 60帧。正确行为：一个文件都不该转。
+    """
+    local = [{"file_name": f"S01E{i:02d}.mkv", "dir": False} for i in range(1, 28)]
+    before = len(local)
+    dv = [_file(f"S01E{i:02d}.mkv", 2.4) for i in range(16, 27)]
+    sdr = [_file(f"S01E{i:02d}.mkv", 2.4) for i in range(22, 27)]
+    url = "https://pan.quark.cn/s/nested2"
+
+    client = FakeClient(
+        local,
+        [{"shareurl": url, "taskname": "尚公主"}],
+        {url: _detail(*(dv + sdr))},
+        nodes={
+            url: [
+                ShareNode(url=url, path="/", depth=0, direct=[], videos=dv + sdr),
+                ShareNode(
+                    url=f"{url}#/list/share/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                    path="/4K DV 60帧",
+                    depth=1,
+                    direct=dv,
+                    videos=dv,
+                ),
+                ShareNode(
+                    url=f"{url}#/list/share/ffffffffffffffffffffffffffffffff",
+                    path="/4K SDR 60帧",
+                    depth=1,
+                    direct=sdr,
+                    videos=sdr,
+                ),
+            ]
+        },
+    )
+
+    report = await plugin._run_one_subscription(client, "尚公主")
+
+    assert client.added == []
+    assert "最新" in report
+    assert len(client.local) == before
+
+
+async def test_flow_container_root_falls_back_to_subtree_when_no_folder_has_videos():
+    """极端情况：所有层级都没有直系视频（分享全是空壳目录）。
+
+    这时不能空手而归——退回按子树评估，仍然只转缺的那几集。
+    """
+    local = [{"file_name": f"S01E{i:02d}.mkv", "dir": False} for i in range(1, 10)]
+    nested = [_file(f"S01E{i:02d}.mkv", 2.2) for i in range(1, 13)]
+    url = "https://pan.quark.cn/s/hollow"
+    url2 = f"{url}#/list/share/99999999999999999999999999999999"
+
+    client = FakeClient(
+        local,
+        [{"shareurl": url, "taskname": "某剧"}],
+        {url: _detail(*nested)},
+        nodes={
+            url: [
+                ShareNode(url=url, path="/", depth=0, direct=[], videos=nested),
+                ShareNode(url=url2, path="/空壳", depth=1, direct=[], videos=nested),
+            ]
+        },
+    )
+
+    report = await plugin._run_one_subscription(client, "某剧")
+
+    assert len(client.added) == 1
+    assert "E10~E12" in report
