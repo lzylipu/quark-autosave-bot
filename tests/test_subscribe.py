@@ -51,6 +51,16 @@ class TestParseEpisode:
     def test_no_episode(self):
         assert parse_episode("花絮.mkv") is None
 
+    def test_episode_zero_is_not_an_episode(self):
+        """第 0 集是预告/花絮，不能当成要追的集。
+
+        真机：分享里带「第00集」，订阅每轮都判定本地缺 E00，选中那份分享并落一次盘，
+        永远补不完（2026-11-06 实测）。
+        """
+        assert parse_episode("尚公主 第00集 预告.mkv") is None
+        assert parse_episode("尚公主.E00.mp4") is None
+        assert parse_episode("00.mkv") is None
+
 
 class TestSplitSeason:
     def test_default_season_one(self):

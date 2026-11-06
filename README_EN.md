@@ -327,6 +327,11 @@ For the bot to read **all messages** you send (not just `/` commands), disable p
 
 ## 📝 Changelog
 
+### v0.5.6
+
+- 🎬 **Episode 0 / previews are no longer treated as episodes**: shares containing `第00集`, `E00` or `00.mkv` used to produce a phantom "missing E00", so that share was re-selected every round and files were written again and again — it could never finish (measured live: two consecutive rounds both reported "added E00"). Episode 0 is now excluded from episode parsing
+- 🧪 3 new assertions (`第00集` / `E00` / `00.mkv`), 152 passed
+
 ### v0.5.5
 
 - 🗂 **Only folders holding the videos themselves are selected**: a nested share's root often contains nothing but version folders. Pointing a task at that root makes QASx recurse into the subfolders, and its dedupe inside a subfolder only compares against that subfolder — so episodes already stored locally get copied again (measured on a live instance: 27 episodes at the top level of one show, plus 11 more under `4K DV 60帧` and 5 under `4K SDR 60帧`). Candidates are now scored on each folder's own files and the task points at the folder that really holds the videos

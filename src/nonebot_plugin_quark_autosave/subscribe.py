@@ -311,6 +311,10 @@ def parse_episode(filename: str) -> int | None:
             num = int(raw)
             if len(raw) == 4 and 1900 < num < 2100:
                 continue  # 年份不是集数
+            if num < 1:
+                # 第 0 集是预告/花絮，不是正片。当成集数会让订阅一直追着一个补不到的
+                # 「E00」跑（真机：分享里带 第00集 预告，每轮都选中它并落一次盘）。
+                continue
             return num
     return None
 
